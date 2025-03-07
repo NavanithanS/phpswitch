@@ -10,6 +10,9 @@ A powerful command-line utility for easily switching between multiple PHP versio
 -   🗑️ Safely uninstall PHP versions you no longer need
 -   🔄 Automatically update your shell configuration (.zshrc, .bashrc)
 -   🔌 Manage PHP-FPM services and PHP extensions
+-   ⏱️ Smart caching system for faster version lookups
+-   🔄 Visual loading indicators during longer operations
+-   ⏳ Timeout protection for unresponsive Homebrew commands
 -   🛠️ Robust error handling with helpful troubleshooting suggestions
 -   🎨 Color-coded status messages for better readability
 -   ⚙️ User configuration options with ~/.phpswitch.conf
@@ -91,6 +94,9 @@ Installed PHP versions:
 3) php@8.1 (current)
 4) php@8.2
 
+ℹ️  INFO: Checking for available PHP versions to install...
+Searching for available PHP versions..... Done!
+
 Available PHP versions to install:
 5) php@5.6 (not installed)
 6) php@7.0 (not installed)
@@ -164,6 +170,15 @@ This tool helps you manage multiple PHP versions by:
 7. Offering self-update functionality to stay current
 8. Providing helpful feedback and error handling throughout the process
 
+### Performance Optimizations (v1.2.0+)
+
+PHPSwitch uses several techniques to ensure responsiveness:
+
+1. **Background Processing**: The search for available PHP versions runs in the background while displaying installed versions
+2. **Smart Caching**: Available PHP versions are cached for 1 hour to avoid repeated slow Homebrew searches
+3. **Visual Feedback**: Loading indicators display during potentially long operations
+4. **Timeout Protection**: Commands have built-in timeouts to prevent the script from hanging
+
 ## Project Structure
 
 ```
@@ -213,6 +228,14 @@ If installation of a PHP version fails:
 1. Run `brew doctor` to check for Homebrew issues
 2. Try `brew update` to ensure your formulae are up to date
 3. Try installing manually with `brew install php@X.Y`
+
+#### Slow Performance When Listing Available Versions
+
+If the script seems to hang when listing available versions:
+
+1. This is usually due to slow Homebrew search operations, which v1.2.0+ handles better with caching and visual feedback
+2. Try running with `--debug` flag to see detailed information about what's happening
+3. Check your internet connection, as Homebrew may need to fetch the latest formula information
 
 #### Debug Mode
 

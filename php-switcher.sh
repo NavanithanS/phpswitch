@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Version: 1.1.0
+# Version: 1.2.0
 # PHPSwitch - PHP Version Manager for macOS
 # This script helps switch between different PHP versions installed via Homebrew
 # and updates shell configuration files (.zshrc, .bashrc, etc.) accordingly
@@ -16,6 +16,44 @@ fi
 
 # Get Homebrew prefix
 HOMEBREW_PREFIX=$(brew --prefix)
+
+# Function to display a spinning animation for long-running processes
+function show_spinner {
+    local message="$1"
+    local pid=$!
+    local spin='-\|/'
+    local i=0
+    
+    echo -n "$message "
+    
+    while kill -0 $pid 2>/dev/null; do
+        i=$(( (i+1) % 4 ))
+        printf "\r$message ${spin:$i:1}"
+        sleep 0.1
+    done
+    
+    printf "\r$message Done!   \n"
+}
+
+# Alternative function with dots animation for progress indication
+function show_progress {
+    local message="$1"
+    local pid=$!
+    local dots=""
+    
+    echo -n "$message"
+    
+    while kill -0 $pid 2>/dev/null; do
+        dots="${dots}."
+        if [ ${#dots} -gt 5 ]; then
+            dots="."
+        fi
+        printf "\r$message%-6s" "$dots"
+        sleep 0.3
+    done
+    
+    printf "\r$message Done!      \n"
+}
 
 # Function to log debug messages
 function debug_log {
@@ -135,10 +173,72 @@ function get_installed_php_versions {
     { brew list | grep "^php@" || true; brew list | grep "^php$" | sed 's/php/php@default/g' || true; } | sort
 }
 
-# Function to get all available PHP versions from Homebrew
+# Function to get all available PHP versions from Homebrew with caching and timeout handling
 function get_available_php_versions {
-    # Get both php@X.Y versions and the default php formula if available
-    { brew search /php@[0-9]/ | grep "^php@" || true; brew search /^php$/ | grep "^php$" | sed 's/php/php@default/g' || true; } | sort
+    local cache_file="/tmp/phpswitch_available_versions.cache"
+    local cache_timeout=3600  # Cache expires after 1 hour (in seconds)
+    local cmd_timeout=15      # Timeout for brew commands in seconds
+    
+    # Check if cache exists and is recent
+    if [ -f "$cache_file" ] && [ $(($(date +%s) - $(stat -f %m "$cache_file"))) -lt "$cache_timeout" ]; then
+        debug_log "Using cached available PHP versions"
+        cat "$cache_file"
+        return
+    fi
+    
+    # Create a temporary file for results
+    local temp_file=$(mktemp)
+    
+    # Function to run a command with timeout
+    run_with_timeout() {
+        local cmd="$1"
+        local timeout="$2"
+        local result_file="$3"
+        
+        # Run the command with timeout
+        (
+            eval "$cmd" > "$result_file" 2>/dev/null &
+            cmd_pid=$!
+            
+            # Wait for the specified timeout
+            sleep "$timeout" &
+            sleep_pid=$!
+            
+            # Wait for either process to finish
+            wait -n "$cmd_pid" "$sleep_pid"
+            
+            # Kill the other process
+            kill "$cmd_pid" 2>/dev/null
+            kill "$sleep_pid" 2>/dev/null
+        )
+    }
+    
+    # Run the search commands with timeout
+    run_with_timeout "brew search /php@[0-9]/ | grep '^php@' || true" "$cmd_timeout" "${temp_file}.1"
+    run_with_timeout "brew search /^php$/ | grep '^php$' | sed 's/php/php@default/g' || true" "$cmd_timeout" "${temp_file}.2"
+    
+    # Combine results and sort
+    if [ -s "${temp_file}.1" ] || [ -s "${temp_file}.2" ]; then
+        cat "${temp_file}.1" "${temp_file}.2" | sort > "$cache_file"
+    else
+        # If both commands timeout or return empty, use cached file if it exists or create a minimal result
+        if [ -f "$cache_file" ]; then
+            debug_log "Brew search timed out, using existing cache"
+        else
+            debug_log "Brew search timed out, creating minimal result set"
+            echo "php@7.4" > "$cache_file"
+            echo "php@8.0" >> "$cache_file"
+            echo "php@8.1" >> "$cache_file"
+            echo "php@8.2" >> "$cache_file"
+            echo "php@8.3" >> "$cache_file"
+        fi
+    fi
+    
+    # Clean up temp files
+    rm -f "${temp_file}" "${temp_file}.1" "${temp_file}.2"
+    
+    # Output the results
+    cat "$cache_file"
 }
 
 # Function to get current linked PHP version from Homebrew
@@ -941,9 +1041,16 @@ function check_for_updates {
     rm -f "$TEMP_FILE"
 }
 
+# Optimized show_menu function with concurrent operations
 function show_menu {
     echo "PHPSwitch - PHP Version Manager for macOS"
     echo "========================================"
+    
+    # Start fetching available PHP versions in the background immediately
+    # This helps overlap I/O operations and improve perceived performance
+    available_versions_file=$(mktemp)
+    get_available_php_versions > "$available_versions_file" &
+    fetch_pid=$!
     
     # Get current PHP version
     current_version=$(get_current_php_version)
@@ -971,8 +1078,31 @@ function show_menu {
         echo "Let's check available PHP versions to install..."
     fi
     
-    # Get available but not installed PHP versions
+    # By this time, our background fetch might already be done or close to done
     echo ""
+    
+    # Check if the background fetch is still running
+    if kill -0 $fetch_pid 2>/dev/null; then
+        show_status "info" "Checking for available PHP versions to install..."
+        
+        # Show progress while waiting for the fetch to complete
+        show_progress "Searching for available PHP versions" &
+        progress_pid=$!
+        
+        # Associate progress display with the fetch process
+        disown $progress_pid
+        
+        # Wait for the fetch to complete
+        wait $fetch_pid
+        
+        # Stop the progress display
+        kill $progress_pid 2>/dev/null
+        wait $progress_pid 2>/dev/null
+        
+        # Clear the line
+        printf "\r%-50s\r" " "
+    fi
+    
     echo "Available PHP versions to install:"
     
     local available_versions=()
@@ -984,7 +1114,9 @@ function show_menu {
             echo "$i) $version (not installed)"
             ((i++))
         fi
-    done < <(get_available_php_versions)
+    done < "$available_versions_file"
+    
+    rm -f "$available_versions_file"
     
     if [ ${#versions[@]} -eq 0 ] && [ ${#available_versions[@]} -eq 0 ]; then
         show_status "error" "No PHP versions found available via Homebrew"
