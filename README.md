@@ -8,8 +8,11 @@ A powerful command-line utility for easily switching between multiple PHP versio
 -   🔍 List all installed and available PHP versions from Homebrew
 -   ⬇️ Install new PHP versions on demand
 -   🗑️ Safely uninstall PHP versions you no longer need
--   🔄 Automatically update your shell configuration (.zshrc, .bashrc)
+-   🔄 Automatically update your shell configuration (.zshrc, .bashrc, .config/fish/config.fish)
+-   🐟 Full support for Fish shell in addition to Bash and Zsh
+-   📁 Project-level PHP version detection via .php-version files
 -   🔌 Manage PHP-FPM services and PHP extensions
+-   📜 Non-interactive mode for scripting and automation
 -   ⏱️ Smart caching system for faster version lookups
 -   🔄 Visual loading indicators during longer operations
 -   ⏳ Timeout protection for unresponsive Homebrew commands
@@ -23,7 +26,7 @@ A powerful command-line utility for easily switching between multiple PHP versio
 
 -   macOS (optimized for Apple Silicon M1/M2, works on Intel too)
 -   [Homebrew](https://brew.sh/) package manager
--   Zsh or Bash shell
+-   Zsh, Bash, or Fish shell
 
 ## Installation
 
@@ -74,6 +77,17 @@ phpswitch
 -   `phpswitch --install` - Installs phpswitch as a system command
 -   `phpswitch --uninstall` - Removes phpswitch from your system
 -   `phpswitch --update` - Checks for and installs the latest version
+-   `phpswitch --switch=VERSION` - Switch to specified PHP version
+-   `phpswitch --switch-force=VERSION` - Switch to PHP version, installing if needed
+-   `phpswitch --install=VERSION` - Install specified PHP version
+-   `phpswitch --uninstall=VERSION` - Uninstall specified PHP version
+-   `phpswitch --uninstall-force=VERSION` - Force uninstall specified PHP version
+-   `phpswitch --list` - List installed and available PHP versions
+-   `phpswitch --json` - List PHP versions in JSON format
+-   `phpswitch --current` - Show current PHP version
+-   `phpswitch --project` or `-p` - Switch to the PHP version specified in project file
+-   `phpswitch --clear-cache` - Clear cached data
+-   `phpswitch --refresh-cache` - Refresh cache of available PHP versions
 -   `phpswitch --debug` - Runs script in debug mode with additional logging
 -   `phpswitch --help` or `phpswitch -h` - Displays help information
 
@@ -105,10 +119,28 @@ Available PHP versions to install:
 u) Uninstall a PHP version
 e) Manage PHP extensions
 c) Configure PHPSwitch
+d) Diagnose PHP environment
+p) Set current PHP version as project default
 0) Exit without changes
 
-Please select PHP version to use (0-7, u, e, c):
+Please select PHP version to use (0-7, u, e, c, d, p):
 ```
+
+#### Using Project-level PHP Versions
+
+Create a `.php-version` file in your project directory:
+
+```bash
+echo "8.1" > .php-version
+```
+
+Then simply run:
+
+```bash
+phpswitch -p
+```
+
+PHPSwitch will detect the version specified in the file and switch to it automatically.
 
 #### Managing PHP Extensions
 
@@ -137,6 +169,37 @@ Options:
 Please select an option (0-3):
 ```
 
+#### Diagnosing PHP Environment
+
+Select the `d` option from the main menu to diagnose PHP environment issues:
+
+```
+PATH Diagnostic
+===============
+
+Current PATH:
+1  /opt/homebrew/opt/php@8.1/bin
+...
+
+PHP binaries in PATH:
+1) /opt/homebrew/opt/php@8.1/bin/php
+   Version: PHP 8.1.12 (cli) (built: Nov 16 2022 02:28:39)
+   Type: Direct binary
+
+Active PHP:
+/opt/homebrew/opt/php@8.1/bin/php
+PHP 8.1.12 (cli) (built: Nov 16 2022 02:28:39)
+
+Expected PHP path for current version:
+/opt/homebrew/opt/php@8.1/bin/php
+
+Recommended actions:
+1. Ensure the PHP version you want is first in your PATH
+2. Check for conflicting PHP binaries in your PATH
+3. Run 'hash -r' (bash/zsh) or 'rehash' (fish) to clear command hash table
+4. Open a new terminal session to ensure PATH changes take effect
+```
+
 #### Configuring PHPSwitch
 
 Select the `c` option from the main menu to configure PHPSwitch behavior:
@@ -147,10 +210,11 @@ PHPSwitch Configuration
 Current Configuration:
 1) Auto restart PHP-FPM: true
 2) Backup config files: true
-3) Default PHP version: None
+3) Maximum backups to keep: 5
+4) Default PHP version: None
 0) Return to main menu
 
-Select setting to change (0-3):
+Select setting to change (0-4):
 ```
 
 #### Uninstalling a PHP Version
@@ -163,12 +227,13 @@ This tool helps you manage multiple PHP versions by:
 
 1. Showing you all installed and available PHP versions from Homebrew
 2. Handling the Homebrew linking/unlinking process
-3. Updating your shell configuration file (`.zshrc`, `.bashrc`, etc.) to ensure proper PATH configuration
+3. Updating your shell configuration file (`.zshrc`, `.bashrc`, `.config/fish/config.fish`, etc.) to ensure proper PATH configuration
 4. Managing PHP-FPM services for the selected version
 5. Providing extension management capabilities
-6. Supporting user preferences through a configuration file
-7. Offering self-update functionality to stay current
-8. Providing helpful feedback and error handling throughout the process
+6. Supporting project-level PHP version specification
+7. Supporting user preferences through a configuration file
+8. Offering self-update functionality to stay current
+9. Providing helpful feedback and error handling throughout the process
 
 ### Performance Optimizations (v1.2.0+)
 
@@ -197,6 +262,7 @@ PHPSwitch supports user configuration through a `~/.phpswitch.conf` file:
 AUTO_RESTART_PHP_FPM=true   # Automatically restart PHP-FPM when switching versions
 BACKUP_CONFIG_FILES=true    # Create backups of shell config files before modifying
 DEFAULT_PHP_VERSION=""      # Default PHP version to use (empty means none)
+MAX_BACKUPS=5              # Maximum number of backup files to keep
 ```
 
 You can edit this file directly or use the built-in configuration menu.
@@ -247,7 +313,7 @@ phpswitch --debug
 
 #### Unsupported Shell
 
-If you're using a shell other than Bash or Zsh, the script will use ~/.profile. You may need to manually source this file or consider contributing support for your shell!
+PHPSwitch now supports Bash, Zsh, and Fish shells. If you're using another shell, it will use ~/.profile.
 
 ## Contributing
 
@@ -263,7 +329,6 @@ Contributions are welcome! Feel free to submit a Pull Request.
 
 Here are some features that could be implemented next:
 
--   Support for additional shells (fish, etc.)
 -   Composer version management
 -   Integration with common PHP development tools (Laravel, Symfony, etc.)
 -   Installation of common PHP applications (WordPress, Drupal, etc.)
