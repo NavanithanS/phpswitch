@@ -1,14 +1,23 @@
 #!/bin/bash
 # Script to combine all modules into a single file for distribution
 
-COMBINED_FILE="phpswitch-combined.sh"
-RELEASE_FILE="php-switcher.sh"
+# Determine script and parent directory locations
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PARENT_DIR="$( cd "$SCRIPT_DIR/.." && pwd )"
+
+# Set output file paths - place them in the parent directory
+COMBINED_FILE="$PARENT_DIR/phpswitch-combined.sh"
+RELEASE_FILE="$PARENT_DIR/php-switcher.sh"
+
+# Also create copies in the current directory for development reference
+DEV_COMBINED_FILE="$SCRIPT_DIR/phpswitch-combined.sh"
+DEV_RELEASE_FILE="$SCRIPT_DIR/php-switcher.sh"
+
 VERSION=$(grep "^# Version:" "$SCRIPT_DIR/phpswitch.sh" | cut -d":" -f2 | tr -d " ")
 
 echo "Building PHPSwitch version $VERSION..."
 
-# Start with the shebang and version info
+# Build header for the combined file
 cat > "$COMBINED_FILE" << INNEREOF
 #!/bin/bash
 
@@ -50,6 +59,13 @@ chmod +x "$COMBINED_FILE"
 cp "$COMBINED_FILE" "$RELEASE_FILE"
 chmod +x "$RELEASE_FILE"
 
+# Create copies in the development directory for reference
+cp "$COMBINED_FILE" "$DEV_COMBINED_FILE"
+cp "$RELEASE_FILE" "$DEV_RELEASE_FILE"
+chmod +x "$DEV_COMBINED_FILE"
+chmod +x "$DEV_RELEASE_FILE"
+
 echo "Build complete!"
-echo "- Development version: $COMBINED_FILE"
-echo "- Release version: $RELEASE_FILE"
+echo "- Main release file created at: $RELEASE_FILE"
+echo "- Combined version created at: $COMBINED_FILE"
+echo "- Development copies created in: $SCRIPT_DIR"
