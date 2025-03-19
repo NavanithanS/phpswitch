@@ -4,6 +4,23 @@
 
 # Main command line argument parser
 function cmd_parse_arguments {
+    # Debug mode detection
+    if [ "$1" = "--debug" ]; then
+        DEBUG_MODE=true
+        shift
+    fi
+    
+    # Skip dependency check for basic commands
+    if [ "$1" != "--version" ] && [ "$1" != "-v" ] && 
+       [ "$1" != "--help" ] && [ "$1" != "-h" ] && 
+       [ "$1" != "--check-dependencies" ]; then
+        # Check dependencies
+        utils_check_dependencies || {
+            utils_show_status "error" "Dependency check failed. Please resolve issues before proceeding."
+            exit 1
+        }
+    fi
+    
     # Parse command-line arguments for non-interactive mode
     if [[ "$1" == --switch=* ]]; then
         version="${1#*=}"
@@ -37,6 +54,9 @@ function cmd_parse_arguments {
     elif [ "$1" = "--clear-cache" ]; then
         cmd_clear_phpswitch_cache
         exit 0
+    elif [ "$1" = "--check-dependencies" ]; then
+        utils_check_dependencies
+        exit $?
     elif [ "$1" = "--refresh-cache" ]; then
         utils_show_status "info" "Refreshing PHP versions cache..."
         local cache_dir="$HOME/.cache/phpswitch"
@@ -94,6 +114,7 @@ function cmd_parse_arguments {
         echo "  phpswitch --project, -p         - Switch to the PHP version specified in project file"
         echo "  phpswitch --clear-cache         - Clear cached data"
         echo "  phpswitch --refresh-cache       - Refresh cache of available PHP versions"
+        echo "  phpswitch --check-dependencies  - Check system for required dependencies"
         echo "  phpswitch --install         - Install phpswitch as a system command"
         echo "  phpswitch --uninstall       - Remove phpswitch from your system"
         echo "  phpswitch --update          - Check for and install the latest version"
