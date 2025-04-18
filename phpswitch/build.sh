@@ -34,7 +34,7 @@ tail -n +2 "$SCRIPT_DIR/config/defaults.sh" >> "$COMBINED_FILE"
 echo "" >> "$COMBINED_FILE"
 
 # Add content from each lib module (without shebang)
-modules=("core.sh" "utils.sh" "shell.sh" "version.sh" "fpm.sh" "extensions.sh" "commands.sh")
+modules=("core.sh" "utils.sh" "shell.sh" "version.sh" "fpm.sh" "extensions.sh" "auto-switch.sh" "commands.sh")
 
 for module in "${modules[@]}"; do
     echo "# Module: $module" >> "$COMBINED_FILE"

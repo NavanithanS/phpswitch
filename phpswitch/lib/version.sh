@@ -621,3 +621,34 @@ function version_switch_php {
         echo "Then verify with: php -v"
     fi
 }
+
+# Function for silent/quick PHP version switching for auto-switch
+function version_auto_switch_php {
+    local new_version="$1"
+    local brew_version="$new_version"
+    local current_version=$(core_get_current_php_version)
+    
+    # If versions are the same, no need to switch
+    if [ "$current_version" = "$new_version" ]; then
+        return 0
+    fi
+    
+    core_debug_log "Auto-switching from $current_version to $new_version"
+    
+    # Handle default PHP
+    if [ "$new_version" = "php@default" ]; then
+        brew_version="php"
+    fi
+    
+    # Unlink current PHP
+    brew unlink "$current_version" &>/dev/null
+    
+    # Link new PHP
+    brew link --force "$brew_version" &>/dev/null
+    
+    # Update PATH for current session
+    shell_force_reload "$new_version" &>/dev/null
+    
+    # No UI feedback for auto-switching
+    return 0
+}

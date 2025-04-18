@@ -24,6 +24,7 @@ function core_load_config {
     BACKUP_CONFIG_FILES=true
     DEFAULT_PHP_VERSION=""
     MAX_BACKUPS=5
+    AUTO_SWITCH_PHP_VERSION=false
     
     # Load settings if config exists
     if [ -f "$CONFIG_FILE" ]; then
@@ -43,6 +44,7 @@ AUTO_RESTART_PHP_FPM=true
 BACKUP_CONFIG_FILES=true
 DEFAULT_PHP_VERSION=""
 MAX_BACKUPS=5
+AUTO_SWITCH_PHP_VERSION=false
 EOL
         utils_show_status "success" "Created default configuration at ~/.phpswitch.conf"
     fi
