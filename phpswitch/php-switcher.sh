@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Version: 1.4.0
+# Version: 1.3.0
 # PHPSwitch - PHP Version Manager for macOS
 # This script helps switch between different PHP versions installed via Homebrew
 # and updates shell configuration files (.zshrc, .bashrc, etc.) accordingly
@@ -14,7 +14,7 @@ DEFAULT_AUTO_RESTART_PHP_FPM=true
 DEFAULT_BACKUP_CONFIG_FILES=true
 DEFAULT_PHP_VERSION=""
 DEFAULT_MAX_BACKUPS=5
-DEFAULT_AUTO_SWITCH_PHP_VERSION=false
+
 # Module: core.sh
 # PHPSwitch Core Functions
 # Contains essential variables and core functionality
@@ -41,7 +41,6 @@ function core_load_config {
     BACKUP_CONFIG_FILES=true
     DEFAULT_PHP_VERSION=""
     MAX_BACKUPS=5
-    AUTO_SWITCH_PHP_VERSION=false
     
     # Load settings if config exists
     if [ -f "$CONFIG_FILE" ]; then
@@ -61,7 +60,6 @@ AUTO_RESTART_PHP_FPM=true
 BACKUP_CONFIG_FILES=true
 DEFAULT_PHP_VERSION=""
 MAX_BACKUPS=5
-AUTO_SWITCH_PHP_VERSION=false
 EOL
         utils_show_status "success" "Created default configuration at ~/.phpswitch.conf"
     fi
@@ -1593,37 +1591,6 @@ function version_switch_php {
         echo "Then verify with: php -v"
     fi
 }
-
-# Function for silent/quick PHP version switching for auto-switch
-function version_auto_switch_php {
-    local new_version="$1"
-    local brew_version="$new_version"
-    local current_version=$(core_get_current_php_version)
-    
-    # If versions are the same, no need to switch
-    if [ "$current_version" = "$new_version" ]; then
-        return 0
-    fi
-    
-    core_debug_log "Auto-switching from $current_version to $new_version"
-    
-    # Handle default PHP
-    if [ "$new_version" = "php@default" ]; then
-        brew_version="php"
-    fi
-    
-    # Unlink current PHP
-    brew unlink "$current_version" &>/dev/null
-    
-    # Link new PHP
-    brew link --force "$brew_version" &>/dev/null
-    
-    # Update PATH for current session
-    shell_force_reload "$new_version" &>/dev/null
-    
-    # No UI feedback for auto-switching
-    return 0
-}
 # Module: fpm.sh
 # PHPSwitch PHP-FPM Management
 # Handles PHP-FPM service operations
@@ -1895,8 +1862,6 @@ function ext_manage_extensions {
         ext_manage_extensions "$php_version"
     fi
 }
-# Module: auto-switch.sh
-
 # Module: commands.sh
 # PHPSwitch Command Line Parsing
 # Handles command line arguments and menu display
@@ -1983,36 +1948,6 @@ function cmd_parse_arguments {
             utils_show_status "warning" "No project-specific PHP version found"
             exit 1
         fi
-    elif [ "$1" = "--auto-mode" ]; then
-        # Special quiet mode for auto-switching - used by shell hooks
-        if version_check_project > /dev/null; then
-            project_php_version=$(version_check_project)
-            current_version=$(core_get_current_php_version)
-            
-            # Only switch if the version is different
-            if [ "$current_version" != "$project_php_version" ]; then
-                if core_check_php_installed "$project_php_version"; then
-                    # Use the simplified auto-switching function
-                    auto_switch_php "$project_php_version"
-                    exit $?
-                else
-                    # Don't attempt to install in auto-mode
-                    exit 1
-                fi
-            else
-                # Already on the correct version
-                exit 0
-            fi
-        else
-            # No project PHP version found
-            exit 0
-        fi
-    elif [ "$1" = "--install-auto-switch" ]; then
-        auto_install
-        exit $?
-    elif [ "$1" = "--clear-directory-cache" ]; then
-        auto_clear_directory_cache
-        exit 0
     elif [ "$1" = "--install" ]; then
         cmd_install_as_command
         exit 0
@@ -2031,27 +1966,25 @@ function cmd_parse_arguments {
         echo "PHPSwitch - PHP Version Manager for macOS"
         echo "========================================"
         echo "Usage:"
-        echo "  phpswitch                      - Run the interactive menu to switch PHP versions"
-        echo "  phpswitch --switch=VERSION     - Switch to specified PHP version"
+        echo "  phpswitch                   - Run the interactive menu to switch PHP versions"
+        echo "  phpswitch --switch=VERSION      - Switch to specified PHP version"
         echo "  phpswitch --switch-force=VERSION - Switch to PHP version, installing if needed"
-        echo "  phpswitch --install=VERSION    - Install specified PHP version"
-        echo "  phpswitch --uninstall=VERSION  - Uninstall specified PHP version"
+        echo "  phpswitch --install=VERSION     - Install specified PHP version"
+        echo "  phpswitch --uninstall=VERSION   - Uninstall specified PHP version"
         echo "  phpswitch --uninstall-force=VERSION - Force uninstall specified PHP version"
-        echo "  phpswitch --list               - List installed and available PHP versions"
-        echo "  phpswitch --json               - List PHP versions in JSON format"
-        echo "  phpswitch --current            - Show current PHP version"
-        echo "  phpswitch --project, -p        - Switch to the PHP version specified in project file"
-        echo "  phpswitch --clear-cache        - Clear cached data"
-        echo "  phpswitch --refresh-cache      - Refresh cache of available PHP versions"
-        echo "  phpswitch --install-auto-switch - Enable automatic PHP switching based on directory"
-        echo "  phpswitch --clear-directory-cache - Clear auto-switching directory cache"
-        echo "  phpswitch --check-dependencies - Check system for required dependencies"
-        echo "  phpswitch --install            - Install phpswitch as a system command"
-        echo "  phpswitch --uninstall          - Remove phpswitch from your system"
-        echo "  phpswitch --update             - Check for and install the latest version"
-        echo "  phpswitch --version, -v        - Show phpswitch version"
-        echo "  phpswitch --debug              - Run with debug logging enabled"
-        echo "  phpswitch --help, -h           - Display this help message"
+        echo "  phpswitch --list                - List installed and available PHP versions"
+        echo "  phpswitch --json                - List PHP versions in JSON format"
+        echo "  phpswitch --current             - Show current PHP version"
+        echo "  phpswitch --project, -p         - Switch to the PHP version specified in project file"
+        echo "  phpswitch --clear-cache         - Clear cached data"
+        echo "  phpswitch --refresh-cache       - Refresh cache of available PHP versions"
+        echo "  phpswitch --check-dependencies  - Check system for required dependencies"
+        echo "  phpswitch --install         - Install phpswitch as a system command"
+        echo "  phpswitch --uninstall       - Remove phpswitch from your system"
+        echo "  phpswitch --update          - Check for and install the latest version"
+        echo "  phpswitch --version, -v     - Show phpswitch version"
+        echo "  phpswitch --debug           - Run with debug logging enabled"
+        echo "  phpswitch --help, -h        - Display this help message"
         exit 0
     else
         # No arguments or debug mode only - show the interactive menu
@@ -2570,10 +2503,9 @@ function cmd_show_menu {
     echo "c) Configure PHPSwitch"
     echo "d) Diagnose PHP environment"
     echo "p) Set current PHP version as project default"
-    echo "a) Configure auto-switching for PHP versions"
     echo "0) Exit without changes"
     echo ""
-    echo -n "Please select PHP version to use (0-$max_option, u, e, c, d, p, a): "
+    echo -n "Please select PHP version to use (0-$max_option, u, e, c, d, p): "
     
     local selection
     local valid_selection=false
@@ -2624,12 +2556,6 @@ function cmd_show_menu {
             # Return to main menu after setting project version
             cmd_show_menu
             return $?
-        elif [ "$selection" = "a" ]; then
-            valid_selection=true
-            cmd_configure_auto_switch
-            # Return to main menu after setting up auto-switching
-            cmd_show_menu
-            return $?
         elif utils_validate_numeric_input "$selection" 1 $max_option; then
             valid_selection=true
             # Check if selection is in installed versions
@@ -2646,47 +2572,9 @@ function cmd_show_menu {
             version_switch_php "$selected_version" "$selected_is_installed"
             return $?
         else
-            echo -n "Invalid selection. Please enter a number between 0 and $max_option, or 'u', 'e', 'c', 'd', 'p', 'a': "
+            echo -n "Invalid selection. Please enter a number between 0 and $max_option, or 'u', 'e', 'c', 'd', 'p': "
         fi
     done
-}
-
-# Function to configure auto-switching
-function cmd_configure_auto_switch {
-    echo "Auto-switching Configuration"
-    echo "============================"
-    echo ""
-    echo "Auto-switching allows PHPSwitch to automatically change PHP versions when"
-    echo "you enter a directory containing a .php-version file."
-    echo ""
-    
-    # Check if auto-switching is enabled
-    if [ "$AUTO_SWITCH_PHP_VERSION" = "true" ]; then
-        utils_show_status "info" "Auto-switching is currently ENABLED"
-        
-        echo -n "Would you like to disable auto-switching? (y/n): "
-        if [ "$(utils_validate_yes_no "Disable auto-switching?" "n")" = "y" ]; then
-            # Update config file
-            sed -i.bak "s/AUTO_SWITCH_PHP_VERSION=.*/AUTO_SWITCH_PHP_VERSION=false/" "$HOME/.phpswitch.conf"
-            rm -f "$HOME/.phpswitch.conf.bak"
-            
-            utils_show_status "success" "Auto-switching has been disabled"
-            echo "This change will take effect the next time you open a new terminal window."
-        else
-            # Offer to clear directory cache
-            echo -n "Would you like to clear the directory cache? (y/n): "
-            if [ "$(utils_validate_yes_no "Clear directory cache?" "n")" = "y" ]; then
-                auto_clear_directory_cache
-            fi
-        fi
-    else
-        utils_show_status "info" "Auto-switching is currently DISABLED"
-        
-        echo -n "Would you like to enable auto-switching? (y/n): "
-        if [ "$(utils_validate_yes_no "Enable auto-switching?" "y")" = "y" ]; then
-            auto_install
-        fi
-    fi
 }
 
 # Function to show uninstall menu
@@ -2779,10 +2667,9 @@ function cmd_configure_phpswitch {
     echo "2) Backup config files: $BACKUP_CONFIG_FILES"
     echo "3) Maximum backups to keep: ${MAX_BACKUPS:-5}"
     echo "4) Default PHP version: ${DEFAULT_PHP_VERSION:-None}"
-    echo "5) Auto-switching PHP versions: $AUTO_SWITCH_PHP_VERSION"
     echo "0) Return to main menu"
     echo ""
-    echo -n "Select setting to change (0-5): "
+    echo -n "Select setting to change (0-4): "
     
     local option
     read -r option
@@ -2844,50 +2731,6 @@ function cmd_configure_phpswitch {
                 utils_show_status "error" "Invalid selection"
             fi
             ;;
-        5)
-            echo -n "Enable automatic PHP version switching based on directory? (y/n): "
-            if [ "$(utils_validate_yes_no "Enable auto-switching?" "$AUTO_SWITCH_PHP_VERSION")" = "y" ]; then
-                AUTO_SWITCH_PHP_VERSION=true
-                
-                # Ask to set up hooks if not already done
-                local shell_type=$(shell_detect_shell)
-                local hook_file
-                local hook_exists=false
-                
-                case "$shell_type" in
-                    "bash")
-                        hook_file="$HOME/.bashrc"
-                        if [ -f "$hook_file" ] && grep -q "phpswitch_auto_detect_project" "$hook_file"; then
-                            hook_exists=true
-                        fi
-                        ;;
-                    "zsh")
-                        hook_file="$HOME/.zshrc"
-                        if [ -f "$hook_file" ] && grep -q "phpswitch_auto_detect_project" "$hook_file"; then
-                            hook_exists=true
-                        fi
-                        ;;
-                    "fish")
-                        hook_file="$HOME/.config/fish/config.fish"
-                        if [ -f "$hook_file" ] && grep -q "phpswitch_auto_detect_project" "$hook_file"; then
-                            hook_exists=true
-                        fi
-                        ;;
-                esac
-                
-                if [ "$hook_exists" = "false" ]; then
-                    echo -n "Would you like to install the shell hooks for auto-switching? (y/n): "
-                    if [ "$(utils_validate_yes_no "Install shell hooks?" "y")" = "y" ]; then
-                        cmd_configure_auto_switch
-                    else
-                        utils_show_status "warning" "Auto-switching is enabled but shell hooks are not installed"
-                        echo "Run 'phpswitch --install-auto-switch' to install the hooks later."
-                    fi
-                fi
-            else
-                AUTO_SWITCH_PHP_VERSION=false
-            fi
-            ;;
         0)
             return 0
             ;;
@@ -2903,7 +2746,6 @@ AUTO_RESTART_PHP_FPM=$AUTO_RESTART_PHP_FPM
 BACKUP_CONFIG_FILES=$BACKUP_CONFIG_FILES
 DEFAULT_PHP_VERSION="$DEFAULT_PHP_VERSION"
 MAX_BACKUPS=$MAX_BACKUPS
-AUTO_SWITCH_PHP_VERSION=$AUTO_SWITCH_PHP_VERSION
 EOL
     
     utils_show_status "success" "Configuration updated"
