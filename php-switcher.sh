@@ -598,6 +598,127 @@ function utils_diagnose_php_environment {
         echo "  Check your Homebrew installation and PATH environment variable"
     fi
 }
+
+# Function to validate system dependencies
+function utils_check_dependencies {
+    utils_show_status "info" "Checking dependencies..."
+    
+    # Check for Homebrew
+    if ! command -v brew >/dev/null 2>&1; then
+        utils_show_status "error" "Homebrew is not installed"
+        echo "PHPSwitch requires Homebrew to manage PHP versions."
+        echo "Please install Homebrew first: https://brew.sh"
+        return 1
+    fi
+
+    # Check Homebrew version
+    local brew_version=$(brew --version | head -n 1 | grep -o "[0-9]\+\.[0-9]\+\.[0-9]\+")
+    local min_version="3.0.0"
+    
+    # Basic version comparison
+    if [[ "$(printf '%s\n' "$min_version" "$brew_version" | sort -V | head -n1)" != "$min_version" ]]; then
+        utils_show_status "warning" "Detected Homebrew version $brew_version"
+        echo "PHPSwitch works best with Homebrew 3.0.0 or newer."
+        echo "Consider upgrading with: brew update"
+    fi
+    
+    # Check for required system commands
+    local required_commands=("curl" "grep" "sed" "awk" "mktemp" "perl")
+    local missing_commands=()
+    
+    for cmd in "${required_commands[@]}"; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            missing_commands+=("$cmd")
+        fi
+    done
+    
+    if [ ${#missing_commands[@]} -gt 0 ]; then
+        utils_show_status "error" "Missing required commands: ${missing_commands[*]}"
+        echo "These commands are needed for PHPSwitch to function properly."
+        return 1
+    fi
+    
+    # Check for macOS
+    if [[ "$OSTYPE" != "darwin"* ]]; then
+        utils_show_status "warning" "PHPSwitch is designed for macOS"
+        echo "Some features may not work correctly on $OSTYPE."
+    else
+        # Check for xcode command line tools on macOS
+        if ! xcode-select -p >/dev/null 2>&1; then
+            utils_show_status "warning" "Xcode Command Line Tools may not be installed"
+            echo "Some Homebrew commands might fail. Install with:"
+            echo "xcode-select --install"
+        fi
+    fi
+    
+    # Check for supported shell
+    local shell_type=$(shell_detect_shell)
+    if [ "$shell_type" = "unknown" ]; then
+        utils_show_status "warning" "Unrecognized shell: $SHELL"
+        echo "PHPSwitch works best with bash, zsh, or fish shells."
+        echo "Shell configuration may not be properly updated."
+    fi
+    
+    # Verify PHP is available through Homebrew
+    if ! brew list --formula 2>/dev/null | grep -q "^php" && ! brew list --formula 2>/dev/null | grep -q "^php@"; then
+        utils_show_status "warning" "No PHP versions detected from Homebrew"
+        echo "PHPSwitch manages PHP versions installed via Homebrew."
+        echo "You might need to install PHP first with: brew install php"
+    fi
+    
+    # Check for write permissions in important directories
+    local brew_prefix="$(brew --prefix)"
+    if [ ! -w "$brew_prefix/bin" ] && [ ! -w "/usr/local/bin" ]; then
+        utils_show_status "warning" "Limited write permissions detected"
+        echo "You may need to use sudo for some operations."
+    fi
+    
+    # Verify cache directory exists and is writable
+    local cache_dir="$HOME/.cache/phpswitch"
+    if [ ! -d "$cache_dir" ]; then
+        mkdir -p "$cache_dir" 2>/dev/null || {
+            utils_show_status "warning" "Could not create cache directory: $cache_dir"
+            echo "Some caching features may not work correctly."
+        }
+    elif [ ! -w "$cache_dir" ]; then
+        utils_show_status "warning" "Cache directory is not writable: $cache_dir"
+        echo "Some caching features may not work correctly."
+    fi
+    
+    utils_show_status "success" "All critical dependencies satisfied"
+    return 0
+}
+
+# Function to compare semantic versions (returns true if version1 >= version2)
+function utils_compare_versions {
+    local version1="$1"
+    local version2="$2"
+    
+    # Extract major, minor, patch versions
+    local v1_parts=(${version1//./ })
+    local v2_parts=(${version2//./ })
+    
+    # Compare major version
+    if (( ${v1_parts[0]} > ${v2_parts[0]} )); then
+        return 0
+    elif (( ${v1_parts[0]} < ${v2_parts[0]} )); then
+        return 1
+    fi
+    
+    # Compare minor version
+    if (( ${v1_parts[1]} > ${v2_parts[1]} )); then
+        return 0
+    elif (( ${v1_parts[1]} < ${v2_parts[1]} )); then
+        return 1
+    fi
+    
+    # Compare patch version
+    if (( ${v1_parts[2]} >= ${v2_parts[2]} )); then
+        return 0
+    else
+        return 1
+    fi
+}
 # Module: shell.sh
 # PHPSwitch Shell Management
 # Handles shell detection and configuration file updates
@@ -1747,6 +1868,23 @@ function ext_manage_extensions {
 
 # Main command line argument parser
 function cmd_parse_arguments {
+    # Debug mode detection
+    if [ "$1" = "--debug" ]; then
+        DEBUG_MODE=true
+        shift
+    fi
+    
+    # Skip dependency check for basic commands
+    if [ "$1" != "--version" ] && [ "$1" != "-v" ] && 
+       [ "$1" != "--help" ] && [ "$1" != "-h" ] && 
+       [ "$1" != "--check-dependencies" ]; then
+        # Check dependencies
+        utils_check_dependencies || {
+            utils_show_status "error" "Dependency check failed. Please resolve issues before proceeding."
+            exit 1
+        }
+    fi
+    
     # Parse command-line arguments for non-interactive mode
     if [[ "$1" == --switch=* ]]; then
         version="${1#*=}"
@@ -1780,6 +1918,9 @@ function cmd_parse_arguments {
     elif [ "$1" = "--clear-cache" ]; then
         cmd_clear_phpswitch_cache
         exit 0
+    elif [ "$1" = "--check-dependencies" ]; then
+        utils_check_dependencies
+        exit $?
     elif [ "$1" = "--refresh-cache" ]; then
         utils_show_status "info" "Refreshing PHP versions cache..."
         local cache_dir="$HOME/.cache/phpswitch"
@@ -1837,6 +1978,7 @@ function cmd_parse_arguments {
         echo "  phpswitch --project, -p         - Switch to the PHP version specified in project file"
         echo "  phpswitch --clear-cache         - Clear cached data"
         echo "  phpswitch --refresh-cache       - Refresh cache of available PHP versions"
+        echo "  phpswitch --check-dependencies  - Check system for required dependencies"
         echo "  phpswitch --install         - Install phpswitch as a system command"
         echo "  phpswitch --uninstall       - Remove phpswitch from your system"
         echo "  phpswitch --update          - Check for and install the latest version"
