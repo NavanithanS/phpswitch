@@ -413,7 +413,7 @@ function utils_check_dependencies {
                 fi
             else
                 utils_show_status "success" "Permissions fixed"
-            }
+            fi
         fi
     fi
     
