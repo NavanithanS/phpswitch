@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Version: 1.3.0
+# Version: 1.4.1
 # PHPSwitch - PHP Version Manager for macOS
 # This script helps switch between different PHP versions installed via Homebrew
 # and updates shell configuration files (.zshrc, .bashrc, etc.) accordingly
@@ -14,7 +14,7 @@ DEFAULT_AUTO_RESTART_PHP_FPM=true
 DEFAULT_BACKUP_CONFIG_FILES=true
 DEFAULT_PHP_VERSION=""
 DEFAULT_MAX_BACKUPS=5
-
+DEFAULT_AUTO_SWITCH_PHP_VERSION=false
 # Module: core.sh
 # PHPSwitch Core Functions
 # Contains essential variables and core functionality
@@ -41,6 +41,7 @@ function core_load_config {
     BACKUP_CONFIG_FILES=true
     DEFAULT_PHP_VERSION=""
     MAX_BACKUPS=5
+    AUTO_SWITCH_PHP_VERSION=false
     
     # Load settings if config exists
     if [ -f "$CONFIG_FILE" ]; then
@@ -60,6 +61,7 @@ AUTO_RESTART_PHP_FPM=true
 BACKUP_CONFIG_FILES=true
 DEFAULT_PHP_VERSION=""
 MAX_BACKUPS=5
+AUTO_SWITCH_PHP_VERSION=false
 EOL
         utils_show_status "success" "Created default configuration at ~/.phpswitch.conf"
     fi
@@ -71,11 +73,23 @@ function core_get_installed_php_versions {
     { brew list | grep "^php@" || true; brew list | grep "^php$" | sed 's/php/php@default/g' || true; } | sort
 }
 
-# Enhanced get_available_php_versions function with persistent caching
+# Enhanced get_available_php_versions function with persistent caching and better error handling
 function core_get_available_php_versions {
     # Create a more persistent cache location
     local cache_dir="$HOME/.cache/phpswitch"
-    mkdir -p "$cache_dir"
+    
+    # Try to create the cache directory, continue even if it fails
+    mkdir -p "$cache_dir" 2>/dev/null
+    
+    # Check if we can write to the cache directory
+    local cache_writable=true
+    if [ ! -w "$cache_dir" ] 2>/dev/null; then
+        cache_writable=false
+        core_debug_log "Cache directory is not writable: $cache_dir"
+        # Use a fallback directory in /tmp for temporary storage
+        cache_dir=$(mktemp -d /tmp/phpswitch.XXXXXX)
+        core_debug_log "Using fallback cache directory: $cache_dir"
+    fi
     
     local cache_file="$cache_dir/available_versions.cache"
     local cache_timeout=3600  # Cache expires after 1 hour (in seconds)
@@ -92,10 +106,16 @@ function core_get_available_php_versions {
         # Get cache file's modification time
         if [ "$(uname)" = "Darwin" ]; then
             # macOS
-            local mod_time=$(stat -f %m "$cache_file")
+            local mod_time=$(stat -f %m "$cache_file" 2>/dev/null)
+            if [ $? -ne 0 ]; then
+                return 1
+            fi
         else
             # Linux and others
-            local mod_time=$(stat -c %Y "$cache_file")
+            local mod_time=$(stat -c %Y "$cache_file" 2>/dev/null)
+            if [ $? -ne 0 ]; then
+                return 1
+            fi
         fi
         
         # Get current time
@@ -112,74 +132,85 @@ function core_get_available_php_versions {
     # Check if cache exists and is recent
     if is_cache_fresh "$cache_file" "$cache_timeout"; then
         core_debug_log "Using cached available PHP versions from $cache_file"
-        cat "$cache_file"
+        cat "$cache_file" 2>/dev/null || core_fallback_php_versions
         return
     fi
     
     core_debug_log "Cache is stale or doesn't exist. Refreshing PHP versions..."
     
-    # Create a fallback file in case brew search fails or times out
-    local fallback_file="$cache_dir/fallback_versions.cache"
-    if [ ! -f "$fallback_file" ]; then
-        core_debug_log "Creating fallback PHP versions file"
-        cat > "$fallback_file" << EOL
-php@7.4
-php@8.0
-php@8.1
-php@8.2
-php@8.3
-php@8.4
-php@default
-EOL
-    fi
+    # Create a fallback PHP versions function instead of a file
+    function core_fallback_php_versions {
+        echo "php@7.4"
+        echo "php@8.0"
+        echo "php@8.1"
+        echo "php@8.2"
+        echo "php@8.3"
+        echo "php@8.4"
+        echo "php@default"
+    }
     
     # Create a temporary file for the new cache
-    local temp_cache_file="$cache_dir/available_versions.cache.tmp"
+    local temp_cache_file
+    if [ "$cache_writable" = "true" ]; then
+        temp_cache_file="$cache_dir/available_versions.cache.tmp"
+    else
+        temp_cache_file=$(mktemp /tmp/phpswitch_versions.XXXXXX)
+    fi
     
     # Try to get actual versions with a timeout
     (
         # Run brew search with a timeout
         core_debug_log "Searching for PHP versions with Homebrew..."
-        (brew search /php@[0-9]/ 2>/dev/null | grep '^php@' > "$temp_cache_file.search1"; 
-         brew search /^php$/ 2>/dev/null | grep '^php$' | sed 's/php/php@default/g' > "$temp_cache_file.search2") & 
-        brew_pid=$!
-        
-        # Wait for up to 10 seconds
-        for i in {1..10}; do
-            if ! kill -0 $brew_pid 2>/dev/null; then
-                # Command completed
-                core_debug_log "Homebrew search completed in $i seconds"
-                break
-            fi
-            sleep 1
-        done
-        
-        # Kill if still running
-        if kill -0 $brew_pid 2>/dev/null; then
-            kill $brew_pid 2>/dev/null
-            wait $brew_pid 2>/dev/null || true
-            core_debug_log "Brew search took too long, using fallback values"
-            cp "$fallback_file" "$temp_cache_file"
-        else
-            # Command finished, combine results
-            if [ -s "$temp_cache_file.search1" ] || [ -s "$temp_cache_file.search2" ]; then
-                cat "$temp_cache_file.search1" "$temp_cache_file.search2" 2>/dev/null | sort > "$temp_cache_file"
-                
-                # Store a copy in the fallback file for future use
-                cp "$temp_cache_file" "$fallback_file"
+        {
+            # Use temp files for output
+            local search_file1=$(mktemp /tmp/phpswitch_search1.XXXXXX)
+            local search_file2=$(mktemp /tmp/phpswitch_search2.XXXXXX)
+            
+            # Run searches in background
+            brew search /php@[0-9]/ 2>/dev/null | grep '^php@' > "$search_file1" & 
+            brew search /^php$/ 2>/dev/null | grep '^php$' | sed 's/php/php@default/g' > "$search_file2" &
+            brew_pid=$!
+            
+            # Wait for up to 10 seconds
+            for i in {1..10}; do
+                if ! kill -0 $brew_pid 2>/dev/null; then
+                    # Command completed
+                    core_debug_log "Homebrew search completed in $i seconds"
+                    break
+                fi
+                sleep 1
+            done
+            
+            # Kill if still running
+            if kill -0 $brew_pid 2>/dev/null; then
+                kill $brew_pid 2>/dev/null
+                wait $brew_pid 2>/dev/null || true
+                core_debug_log "Brew search took too long, using fallback values"
+                core_fallback_php_versions > "$temp_cache_file"
             else
-                # If results are empty, use the fallback
-                core_debug_log "Homebrew search returned empty results, using fallback values"
-                cp "$fallback_file" "$temp_cache_file"
+                # Command finished, combine results
+                if [ -s "$search_file1" ] || [ -s "$search_file2" ]; then
+                    cat "$search_file1" "$search_file2" 2>/dev/null | sort > "$temp_cache_file"
+                else
+                    # If results are empty, use the fallback
+                    core_debug_log "Homebrew search returned empty results, using fallback values"
+                    core_fallback_php_versions > "$temp_cache_file"
+                fi
             fi
+            
+            # Clean up temp files
+            rm -f "$search_file1" "$search_file2"
+        } || {
+            # In case of any error, use fallback values
+            core_debug_log "Error occurred during Homebrew search, using fallback values"
+            core_fallback_php_versions > "$temp_cache_file"
+        }
+        
+        # Move temporary cache to final location if we can write to cache dir
+        if [ "$cache_writable" = "true" ]; then
+            mv "$temp_cache_file" "$cache_file" 2>/dev/null || core_debug_log "Failed to move cache file"
+            core_debug_log "Updated PHP versions cache at $cache_file"
         fi
-        
-        # Clean up temp files
-        rm -f "$temp_cache_file.search1" "$temp_cache_file.search2"
-        
-        # Move temporary cache to final location
-        mv "$temp_cache_file" "$cache_file"
-        core_debug_log "Updated PHP versions cache at $cache_file"
     ) &
     
     # Show a brief spinner while we wait
@@ -201,11 +232,17 @@ EOL
     wait
     
     # Output the results
-    if [ -f "$cache_file" ]; then
-        cat "$cache_file"
+    if [ -f "$temp_cache_file" ]; then
+        cat "$temp_cache_file" 2>/dev/null
+        # Clean up temp file if not in cache dir
+        if [ "$cache_writable" = "false" ]; then
+            rm -f "$temp_cache_file" 2>/dev/null
+        fi
+    elif [ -f "$cache_file" ]; then
+        cat "$cache_file" 2>/dev/null
     else
-        core_debug_log "Cache file still missing, using fallback"
-        cat "$fallback_file"
+        # If all else fails, output fallback versions
+        core_fallback_php_versions
     fi
 }
 
@@ -673,16 +710,37 @@ function utils_check_dependencies {
         echo "You may need to use sudo for some operations."
     fi
     
-    # Verify cache directory exists and is writable
+    # Check cache directory
     local cache_dir="$HOME/.cache/phpswitch"
     if [ ! -d "$cache_dir" ]; then
-        mkdir -p "$cache_dir" 2>/dev/null || {
+        # Try to create the cache directory
+        mkdir -p "$cache_dir" 2>/dev/null
+        if [ $? -ne 0 ]; then
             utils_show_status "warning" "Could not create cache directory: $cache_dir"
-            echo "Some caching features may not work correctly."
-        }
+            echo "This is a non-critical issue. PHPSwitch will use temporary directories instead."
+            echo "To fix this permanently, run: mkdir -p $cache_dir"
+        fi
     elif [ ! -w "$cache_dir" ]; then
         utils_show_status "warning" "Cache directory is not writable: $cache_dir"
-        echo "Some caching features may not work correctly."
+        echo "This is a non-critical issue. PHPSwitch will use temporary directories instead."
+        echo -n "Would you like to fix the permissions now? (y/n): "
+        if [ "$(utils_validate_yes_no "Fix permissions?" "y")" = "y" ]; then
+            # Try to fix permissions without sudo first
+            chmod u+w "$cache_dir" 2>/dev/null
+            if [ ! -w "$cache_dir" ]; then
+                # If that fails, try with sudo
+                echo "Attempting to fix permissions with sudo..."
+                sudo chmod u+w "$cache_dir" 2>/dev/null
+                if [ ! -w "$cache_dir" ]; then
+                    utils_show_status "error" "Could not fix permissions even with sudo"
+                    echo "You can manually fix this with: sudo chmod u+w $cache_dir"
+                else
+                    utils_show_status "success" "Permissions fixed with sudo"
+                fi
+            else
+                utils_show_status "success" "Permissions fixed"
+            }
+        fi
     fi
     
     utils_show_status "success" "All critical dependencies satisfied"
@@ -1591,6 +1649,37 @@ function version_switch_php {
         echo "Then verify with: php -v"
     fi
 }
+
+# Function for silent/quick PHP version switching for auto-switch
+function version_auto_switch_php {
+    local new_version="$1"
+    local brew_version="$new_version"
+    local current_version=$(core_get_current_php_version)
+    
+    # If versions are the same, no need to switch
+    if [ "$current_version" = "$new_version" ]; then
+        return 0
+    fi
+    
+    core_debug_log "Auto-switching from $current_version to $new_version"
+    
+    # Handle default PHP
+    if [ "$new_version" = "php@default" ]; then
+        brew_version="php"
+    fi
+    
+    # Unlink current PHP
+    brew unlink "$current_version" &>/dev/null
+    
+    # Link new PHP
+    brew link --force "$brew_version" &>/dev/null
+    
+    # Update PATH for current session
+    shell_force_reload "$new_version" &>/dev/null
+    
+    # No UI feedback for auto-switching
+    return 0
+}
 # Module: fpm.sh
 # PHPSwitch PHP-FPM Management
 # Handles PHP-FPM service operations
@@ -1862,6 +1951,8 @@ function ext_manage_extensions {
         ext_manage_extensions "$php_version"
     fi
 }
+# Module: auto-switch.sh
+
 # Module: commands.sh
 # PHPSwitch Command Line Parsing
 # Handles command line arguments and menu display
@@ -1948,6 +2039,36 @@ function cmd_parse_arguments {
             utils_show_status "warning" "No project-specific PHP version found"
             exit 1
         fi
+    elif [ "$1" = "--auto-mode" ]; then
+        # Special quiet mode for auto-switching - used by shell hooks
+        if version_check_project > /dev/null; then
+            project_php_version=$(version_check_project)
+            current_version=$(core_get_current_php_version)
+            
+            # Only switch if the version is different
+            if [ "$current_version" != "$project_php_version" ]; then
+                if core_check_php_installed "$project_php_version"; then
+                    # Use the simplified auto-switching function
+                    auto_switch_php "$project_php_version"
+                    exit $?
+                else
+                    # Don't attempt to install in auto-mode
+                    exit 1
+                fi
+            else
+                # Already on the correct version
+                exit 0
+            fi
+        else
+            # No project PHP version found
+            exit 0
+        fi
+    elif [ "$1" = "--install-auto-switch" ]; then
+        auto_install
+        exit $?
+    elif [ "$1" = "--clear-directory-cache" ]; then
+        auto_clear_directory_cache
+        exit 0
     elif [ "$1" = "--install" ]; then
         cmd_install_as_command
         exit 0
@@ -1966,25 +2087,27 @@ function cmd_parse_arguments {
         echo "PHPSwitch - PHP Version Manager for macOS"
         echo "========================================"
         echo "Usage:"
-        echo "  phpswitch                   - Run the interactive menu to switch PHP versions"
-        echo "  phpswitch --switch=VERSION      - Switch to specified PHP version"
+        echo "  phpswitch                      - Run the interactive menu to switch PHP versions"
+        echo "  phpswitch --switch=VERSION     - Switch to specified PHP version"
         echo "  phpswitch --switch-force=VERSION - Switch to PHP version, installing if needed"
-        echo "  phpswitch --install=VERSION     - Install specified PHP version"
-        echo "  phpswitch --uninstall=VERSION   - Uninstall specified PHP version"
+        echo "  phpswitch --install=VERSION    - Install specified PHP version"
+        echo "  phpswitch --uninstall=VERSION  - Uninstall specified PHP version"
         echo "  phpswitch --uninstall-force=VERSION - Force uninstall specified PHP version"
-        echo "  phpswitch --list                - List installed and available PHP versions"
-        echo "  phpswitch --json                - List PHP versions in JSON format"
-        echo "  phpswitch --current             - Show current PHP version"
-        echo "  phpswitch --project, -p         - Switch to the PHP version specified in project file"
-        echo "  phpswitch --clear-cache         - Clear cached data"
-        echo "  phpswitch --refresh-cache       - Refresh cache of available PHP versions"
-        echo "  phpswitch --check-dependencies  - Check system for required dependencies"
-        echo "  phpswitch --install         - Install phpswitch as a system command"
-        echo "  phpswitch --uninstall       - Remove phpswitch from your system"
-        echo "  phpswitch --update          - Check for and install the latest version"
-        echo "  phpswitch --version, -v     - Show phpswitch version"
-        echo "  phpswitch --debug           - Run with debug logging enabled"
-        echo "  phpswitch --help, -h        - Display this help message"
+        echo "  phpswitch --list               - List installed and available PHP versions"
+        echo "  phpswitch --json               - List PHP versions in JSON format"
+        echo "  phpswitch --current            - Show current PHP version"
+        echo "  phpswitch --project, -p        - Switch to the PHP version specified in project file"
+        echo "  phpswitch --clear-cache        - Clear cached data"
+        echo "  phpswitch --refresh-cache      - Refresh cache of available PHP versions"
+        echo "  phpswitch --install-auto-switch - Enable automatic PHP switching based on directory"
+        echo "  phpswitch --clear-directory-cache - Clear auto-switching directory cache"
+        echo "  phpswitch --check-dependencies - Check system for required dependencies"
+        echo "  phpswitch --install            - Install phpswitch as a system command"
+        echo "  phpswitch --uninstall          - Remove phpswitch from your system"
+        echo "  phpswitch --update             - Check for and install the latest version"
+        echo "  phpswitch --version, -v        - Show phpswitch version"
+        echo "  phpswitch --debug              - Run with debug logging enabled"
+        echo "  phpswitch --help, -h           - Display this help message"
         exit 0
     else
         # No arguments or debug mode only - show the interactive menu
@@ -2503,9 +2626,10 @@ function cmd_show_menu {
     echo "c) Configure PHPSwitch"
     echo "d) Diagnose PHP environment"
     echo "p) Set current PHP version as project default"
+    echo "a) Configure auto-switching for PHP versions"
     echo "0) Exit without changes"
     echo ""
-    echo -n "Please select PHP version to use (0-$max_option, u, e, c, d, p): "
+    echo -n "Please select PHP version to use (0-$max_option, u, e, c, d, p, a): "
     
     local selection
     local valid_selection=false
@@ -2556,6 +2680,12 @@ function cmd_show_menu {
             # Return to main menu after setting project version
             cmd_show_menu
             return $?
+        elif [ "$selection" = "a" ]; then
+            valid_selection=true
+            cmd_configure_auto_switch
+            # Return to main menu after setting up auto-switching
+            cmd_show_menu
+            return $?
         elif utils_validate_numeric_input "$selection" 1 $max_option; then
             valid_selection=true
             # Check if selection is in installed versions
@@ -2572,9 +2702,47 @@ function cmd_show_menu {
             version_switch_php "$selected_version" "$selected_is_installed"
             return $?
         else
-            echo -n "Invalid selection. Please enter a number between 0 and $max_option, or 'u', 'e', 'c', 'd', 'p': "
+            echo -n "Invalid selection. Please enter a number between 0 and $max_option, or 'u', 'e', 'c', 'd', 'p', 'a': "
         fi
     done
+}
+
+# Function to configure auto-switching
+function cmd_configure_auto_switch {
+    echo "Auto-switching Configuration"
+    echo "============================"
+    echo ""
+    echo "Auto-switching allows PHPSwitch to automatically change PHP versions when"
+    echo "you enter a directory containing a .php-version file."
+    echo ""
+    
+    # Check if auto-switching is enabled
+    if [ "$AUTO_SWITCH_PHP_VERSION" = "true" ]; then
+        utils_show_status "info" "Auto-switching is currently ENABLED"
+        
+        echo -n "Would you like to disable auto-switching? (y/n): "
+        if [ "$(utils_validate_yes_no "Disable auto-switching?" "n")" = "y" ]; then
+            # Update config file
+            sed -i.bak "s/AUTO_SWITCH_PHP_VERSION=.*/AUTO_SWITCH_PHP_VERSION=false/" "$HOME/.phpswitch.conf"
+            rm -f "$HOME/.phpswitch.conf.bak"
+            
+            utils_show_status "success" "Auto-switching has been disabled"
+            echo "This change will take effect the next time you open a new terminal window."
+        else
+            # Offer to clear directory cache
+            echo -n "Would you like to clear the directory cache? (y/n): "
+            if [ "$(utils_validate_yes_no "Clear directory cache?" "n")" = "y" ]; then
+                auto_clear_directory_cache
+            fi
+        fi
+    else
+        utils_show_status "info" "Auto-switching is currently DISABLED"
+        
+        echo -n "Would you like to enable auto-switching? (y/n): "
+        if [ "$(utils_validate_yes_no "Enable auto-switching?" "y")" = "y" ]; then
+            auto_install
+        fi
+    fi
 }
 
 # Function to show uninstall menu
@@ -2667,9 +2835,10 @@ function cmd_configure_phpswitch {
     echo "2) Backup config files: $BACKUP_CONFIG_FILES"
     echo "3) Maximum backups to keep: ${MAX_BACKUPS:-5}"
     echo "4) Default PHP version: ${DEFAULT_PHP_VERSION:-None}"
+    echo "5) Auto-switching PHP versions: $AUTO_SWITCH_PHP_VERSION"
     echo "0) Return to main menu"
     echo ""
-    echo -n "Select setting to change (0-4): "
+    echo -n "Select setting to change (0-5): "
     
     local option
     read -r option
@@ -2731,6 +2900,50 @@ function cmd_configure_phpswitch {
                 utils_show_status "error" "Invalid selection"
             fi
             ;;
+        5)
+            echo -n "Enable automatic PHP version switching based on directory? (y/n): "
+            if [ "$(utils_validate_yes_no "Enable auto-switching?" "$AUTO_SWITCH_PHP_VERSION")" = "y" ]; then
+                AUTO_SWITCH_PHP_VERSION=true
+                
+                # Ask to set up hooks if not already done
+                local shell_type=$(shell_detect_shell)
+                local hook_file
+                local hook_exists=false
+                
+                case "$shell_type" in
+                    "bash")
+                        hook_file="$HOME/.bashrc"
+                        if [ -f "$hook_file" ] && grep -q "phpswitch_auto_detect_project" "$hook_file"; then
+                            hook_exists=true
+                        fi
+                        ;;
+                    "zsh")
+                        hook_file="$HOME/.zshrc"
+                        if [ -f "$hook_file" ] && grep -q "phpswitch_auto_detect_project" "$hook_file"; then
+                            hook_exists=true
+                        fi
+                        ;;
+                    "fish")
+                        hook_file="$HOME/.config/fish/config.fish"
+                        if [ -f "$hook_file" ] && grep -q "phpswitch_auto_detect_project" "$hook_file"; then
+                            hook_exists=true
+                        fi
+                        ;;
+                esac
+                
+                if [ "$hook_exists" = "false" ]; then
+                    echo -n "Would you like to install the shell hooks for auto-switching? (y/n): "
+                    if [ "$(utils_validate_yes_no "Install shell hooks?" "y")" = "y" ]; then
+                        cmd_configure_auto_switch
+                    else
+                        utils_show_status "warning" "Auto-switching is enabled but shell hooks are not installed"
+                        echo "Run 'phpswitch --install-auto-switch' to install the hooks later."
+                    fi
+                fi
+            else
+                AUTO_SWITCH_PHP_VERSION=false
+            fi
+            ;;
         0)
             return 0
             ;;
@@ -2746,6 +2959,7 @@ AUTO_RESTART_PHP_FPM=$AUTO_RESTART_PHP_FPM
 BACKUP_CONFIG_FILES=$BACKUP_CONFIG_FILES
 DEFAULT_PHP_VERSION="$DEFAULT_PHP_VERSION"
 MAX_BACKUPS=$MAX_BACKUPS
+AUTO_SWITCH_PHP_VERSION=$AUTO_SWITCH_PHP_VERSION
 EOL
     
     utils_show_status "success" "Configuration updated"
