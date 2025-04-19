@@ -56,11 +56,23 @@ function core_get_installed_php_versions {
     { brew list | grep "^php@" || true; brew list | grep "^php$" | sed 's/php/php@default/g' || true; } | sort
 }
 
-# Enhanced get_available_php_versions function with persistent caching
+# Enhanced get_available_php_versions function with persistent caching and better error handling
 function core_get_available_php_versions {
     # Create a more persistent cache location
     local cache_dir="$HOME/.cache/phpswitch"
-    mkdir -p "$cache_dir"
+    
+    # Try to create the cache directory, continue even if it fails
+    mkdir -p "$cache_dir" 2>/dev/null
+    
+    # Check if we can write to the cache directory
+    local cache_writable=true
+    if [ ! -w "$cache_dir" ] 2>/dev/null; then
+        cache_writable=false
+        core_debug_log "Cache directory is not writable: $cache_dir"
+        # Use a fallback directory in /tmp for temporary storage
+        cache_dir=$(mktemp -d /tmp/phpswitch.XXXXXX)
+        core_debug_log "Using fallback cache directory: $cache_dir"
+    fi
     
     local cache_file="$cache_dir/available_versions.cache"
     local cache_timeout=3600  # Cache expires after 1 hour (in seconds)
@@ -77,10 +89,16 @@ function core_get_available_php_versions {
         # Get cache file's modification time
         if [ "$(uname)" = "Darwin" ]; then
             # macOS
-            local mod_time=$(stat -f %m "$cache_file")
+            local mod_time=$(stat -f %m "$cache_file" 2>/dev/null)
+            if [ $? -ne 0 ]; then
+                return 1
+            fi
         else
             # Linux and others
-            local mod_time=$(stat -c %Y "$cache_file")
+            local mod_time=$(stat -c %Y "$cache_file" 2>/dev/null)
+            if [ $? -ne 0 ]; then
+                return 1
+            fi
         fi
         
         # Get current time
@@ -97,74 +115,85 @@ function core_get_available_php_versions {
     # Check if cache exists and is recent
     if is_cache_fresh "$cache_file" "$cache_timeout"; then
         core_debug_log "Using cached available PHP versions from $cache_file"
-        cat "$cache_file"
+        cat "$cache_file" 2>/dev/null || core_fallback_php_versions
         return
     fi
     
     core_debug_log "Cache is stale or doesn't exist. Refreshing PHP versions..."
     
-    # Create a fallback file in case brew search fails or times out
-    local fallback_file="$cache_dir/fallback_versions.cache"
-    if [ ! -f "$fallback_file" ]; then
-        core_debug_log "Creating fallback PHP versions file"
-        cat > "$fallback_file" << EOL
-php@7.4
-php@8.0
-php@8.1
-php@8.2
-php@8.3
-php@8.4
-php@default
-EOL
-    fi
+    # Create a fallback PHP versions function instead of a file
+    function core_fallback_php_versions {
+        echo "php@7.4"
+        echo "php@8.0"
+        echo "php@8.1"
+        echo "php@8.2"
+        echo "php@8.3"
+        echo "php@8.4"
+        echo "php@default"
+    }
     
     # Create a temporary file for the new cache
-    local temp_cache_file="$cache_dir/available_versions.cache.tmp"
+    local temp_cache_file
+    if [ "$cache_writable" = "true" ]; then
+        temp_cache_file="$cache_dir/available_versions.cache.tmp"
+    else
+        temp_cache_file=$(mktemp /tmp/phpswitch_versions.XXXXXX)
+    fi
     
     # Try to get actual versions with a timeout
     (
         # Run brew search with a timeout
         core_debug_log "Searching for PHP versions with Homebrew..."
-        (brew search /php@[0-9]/ 2>/dev/null | grep '^php@' > "$temp_cache_file.search1"; 
-         brew search /^php$/ 2>/dev/null | grep '^php$' | sed 's/php/php@default/g' > "$temp_cache_file.search2") & 
-        brew_pid=$!
-        
-        # Wait for up to 10 seconds
-        for i in {1..10}; do
-            if ! kill -0 $brew_pid 2>/dev/null; then
-                # Command completed
-                core_debug_log "Homebrew search completed in $i seconds"
-                break
-            fi
-            sleep 1
-        done
-        
-        # Kill if still running
-        if kill -0 $brew_pid 2>/dev/null; then
-            kill $brew_pid 2>/dev/null
-            wait $brew_pid 2>/dev/null || true
-            core_debug_log "Brew search took too long, using fallback values"
-            cp "$fallback_file" "$temp_cache_file"
-        else
-            # Command finished, combine results
-            if [ -s "$temp_cache_file.search1" ] || [ -s "$temp_cache_file.search2" ]; then
-                cat "$temp_cache_file.search1" "$temp_cache_file.search2" 2>/dev/null | sort > "$temp_cache_file"
-                
-                # Store a copy in the fallback file for future use
-                cp "$temp_cache_file" "$fallback_file"
+        {
+            # Use temp files for output
+            local search_file1=$(mktemp /tmp/phpswitch_search1.XXXXXX)
+            local search_file2=$(mktemp /tmp/phpswitch_search2.XXXXXX)
+            
+            # Run searches in background
+            brew search /php@[0-9]/ 2>/dev/null | grep '^php@' > "$search_file1" & 
+            brew search /^php$/ 2>/dev/null | grep '^php$' | sed 's/php/php@default/g' > "$search_file2" &
+            brew_pid=$!
+            
+            # Wait for up to 10 seconds
+            for i in {1..10}; do
+                if ! kill -0 $brew_pid 2>/dev/null; then
+                    # Command completed
+                    core_debug_log "Homebrew search completed in $i seconds"
+                    break
+                fi
+                sleep 1
+            done
+            
+            # Kill if still running
+            if kill -0 $brew_pid 2>/dev/null; then
+                kill $brew_pid 2>/dev/null
+                wait $brew_pid 2>/dev/null || true
+                core_debug_log "Brew search took too long, using fallback values"
+                core_fallback_php_versions > "$temp_cache_file"
             else
-                # If results are empty, use the fallback
-                core_debug_log "Homebrew search returned empty results, using fallback values"
-                cp "$fallback_file" "$temp_cache_file"
+                # Command finished, combine results
+                if [ -s "$search_file1" ] || [ -s "$search_file2" ]; then
+                    cat "$search_file1" "$search_file2" 2>/dev/null | sort > "$temp_cache_file"
+                else
+                    # If results are empty, use the fallback
+                    core_debug_log "Homebrew search returned empty results, using fallback values"
+                    core_fallback_php_versions > "$temp_cache_file"
+                fi
             fi
+            
+            # Clean up temp files
+            rm -f "$search_file1" "$search_file2"
+        } || {
+            # In case of any error, use fallback values
+            core_debug_log "Error occurred during Homebrew search, using fallback values"
+            core_fallback_php_versions > "$temp_cache_file"
+        }
+        
+        # Move temporary cache to final location if we can write to cache dir
+        if [ "$cache_writable" = "true" ]; then
+            mv "$temp_cache_file" "$cache_file" 2>/dev/null || core_debug_log "Failed to move cache file"
+            core_debug_log "Updated PHP versions cache at $cache_file"
         fi
-        
-        # Clean up temp files
-        rm -f "$temp_cache_file.search1" "$temp_cache_file.search2"
-        
-        # Move temporary cache to final location
-        mv "$temp_cache_file" "$cache_file"
-        core_debug_log "Updated PHP versions cache at $cache_file"
     ) &
     
     # Show a brief spinner while we wait
@@ -186,11 +215,17 @@ EOL
     wait
     
     # Output the results
-    if [ -f "$cache_file" ]; then
-        cat "$cache_file"
+    if [ -f "$temp_cache_file" ]; then
+        cat "$temp_cache_file" 2>/dev/null
+        # Clean up temp file if not in cache dir
+        if [ "$cache_writable" = "false" ]; then
+            rm -f "$temp_cache_file" 2>/dev/null
+        fi
+    elif [ -f "$cache_file" ]; then
+        cat "$cache_file" 2>/dev/null
     else
-        core_debug_log "Cache file still missing, using fallback"
-        cat "$fallback_file"
+        # If all else fails, output fallback versions
+        core_fallback_php_versions
     fi
 }
 

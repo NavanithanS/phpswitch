@@ -22,6 +22,7 @@ A powerful command-line utility for easily switching between multiple PHP versio
 -   ⚙️ User configuration options with ~/.phpswitch.conf
 -   🔄 Self-update mechanism to stay current
 -   🐞 Debug mode for troubleshooting
+-   🔐 Enhanced permission handling with automatic fallbacks and repair tools
 
 ## Requirements
 
@@ -264,89 +265,19 @@ Would you like to enable auto-switching? (y/n): y
 
 Select the `u` option from the main menu, then choose which version to uninstall.
 
-## How It Works
-
-This tool helps you manage multiple PHP versions by:
-
-1. Showing you all installed and available PHP versions from Homebrew
-2. Handling the Homebrew linking/unlinking process
-3. Updating your shell configuration file (`.zshrc`, `.bashrc`, `.config/fish/config.fish`, etc.) to ensure proper PATH configuration
-4. Managing PHP-FPM services for the selected version
-5. Providing extension management capabilities
-6. Supporting project-level PHP version specification
-7. Automatically switching PHP versions based on directory (when enabled)
-8. Supporting user preferences through a configuration file
-9. Offering self-update functionality to stay current
-10. Providing helpful feedback and error handling throughout the process
-
-### Auto-switching
-
-The auto-switching feature works by:
-
-1. Installing shell-specific hooks that run when you change directories
-2. Checking if the current directory (or any parent directory) contains a `.php-version` file
-3. If found, reading the PHP version and comparing it to the current active version
-4. If different, silently switching to the specified PHP version
-5. Using a caching system to avoid checking directories multiple times
-
-This is particularly useful in a multi-project environment where different projects require different PHP versions. The switching happens automatically without any manual intervention.
-
-### Performance Optimizations (v1.2.0+)
-
-PHPSwitch uses several techniques to ensure responsiveness:
-
-1. **Background Processing**: The search for available PHP versions runs in the background while displaying installed versions
-2. **Smart Caching**: Available PHP versions are cached for 1 hour to avoid repeated slow Homebrew searches
-3. **Directory Caching**: Directory PHP version information is cached to avoid redundant checks
-4. **Visual Feedback**: Loading indicators display during potentially long operations
-5. **Timeout Protection**: Commands have built-in timeouts to prevent the script from hanging
-
-## Project Structure
-
-```
-phpswitch/
-├── lib/
-│   ├── core.sh           # Core functionality
-│   ├── utils.sh          # Utility functions
-│   ├── shell.sh          # Shell detection and config
-│   ├── version.sh        # PHP version management
-│   ├── fpm.sh            # PHP-FPM management
-│   ├── extensions.sh     # PHP extensions management
-│   ├── auto-switch.sh    # Auto-switching functionality
-│   └── commands.sh       # Command-line options
-├── config/
-│   └── defaults.sh       # Default configuration values
-├── php-switcher.sh       # Main script file
-├── LICENSE               # MIT License
-└── README.md             # This documentation
-```
-
-## Configuration
-
-PHPSwitch supports user configuration through a `~/.phpswitch.conf` file:
-
-```bash
-# PHPSwitch Configuration
-AUTO_RESTART_PHP_FPM=true       # Automatically restart PHP-FPM when switching versions
-BACKUP_CONFIG_FILES=true        # Create backups of shell config files before modifying
-DEFAULT_PHP_VERSION=""          # Default PHP version to use (empty means none)
-MAX_BACKUPS=5                   # Maximum number of backup files to keep
-AUTO_SWITCH_PHP_VERSION=false   # Enable automatic PHP version switching by directory
-```
-
-You can edit this file directly or use the built-in configuration menu.
-
 ## Troubleshooting
 
-### Common Issues
+### Permission Issues
 
-#### Permission Denied
-
-If you encounter permission issues, try running the command with `sudo`:
+If you encounter permission errors related to the cache directory, you can use the included permission fixing tool:
 
 ```bash
-sudo phpswitch
+./tools/fix-permissions.sh
 ```
+
+This will automatically repair common permission problems with the PHPSwitch cache and provide detailed information about what's happening.
+
+### Common Issues
 
 #### PHP Version Not Applied
 
@@ -390,9 +321,83 @@ For detailed troubleshooting, use debug mode:
 phpswitch --debug
 ```
 
-#### Unsupported Shell
+## How It Works
 
-PHPSwitch now supports Bash, Zsh, and Fish shells. If you're using another shell, it will use ~/.profile.
+This tool helps you manage multiple PHP versions by:
+
+1. Showing you all installed and available PHP versions from Homebrew
+2. Handling the Homebrew linking/unlinking process
+3. Updating your shell configuration file (`.zshrc`, `.bashrc`, `.config/fish/config.fish`, etc.) to ensure proper PATH configuration
+4. Managing PHP-FPM services for the selected version
+5. Providing extension management capabilities
+6. Supporting project-level PHP version specification
+7. Automatically switching PHP versions based on directory (when enabled)
+8. Supporting user preferences through a configuration file
+9. Offering self-update functionality to stay current
+10. Providing helpful feedback and error handling throughout the process
+11. Implementing robust permission handling with automatic fallbacks and repair tools
+
+### Auto-switching
+
+The auto-switching feature works by:
+
+1. Installing shell-specific hooks that run when you change directories
+2. Checking if the current directory (or any parent directory) contains a `.php-version` file
+3. If found, reading the PHP version and comparing it to the current active version
+4. If different, silently switching to the specified PHP version
+5. Using a caching system to avoid checking directories multiple times
+
+This is particularly useful in a multi-project environment where different projects require different PHP versions. The switching happens automatically without any manual intervention.
+
+### Performance Optimizations and Reliability
+
+PHPSwitch uses several techniques to ensure responsiveness and reliability:
+
+1. **Background Processing**: The search for available PHP versions runs in the background while displaying installed versions
+2. **Smart Caching**: Available PHP versions are cached for 1 hour to avoid repeated slow Homebrew searches
+3. **Directory Caching**: Directory PHP version information is cached to avoid redundant checks
+4. **Visual Feedback**: Loading indicators display during potentially long operations
+5. **Timeout Protection**: Commands have built-in timeouts to prevent the script from hanging
+6. **Permission Handling**: Automatic fallbacks to temporary directories when permission issues are encountered
+7. **Self-Repair Tools**: Includes tools to fix common permission and environment issues
+
+## Project Structure
+
+```
+phpswitch/
+├── lib/
+│   ├── core.sh           # Core functionality
+│   ├── utils.sh          # Utility functions
+│   ├── shell.sh          # Shell detection and config
+│   ├── version.sh        # PHP version management
+│   ├── fpm.sh            # PHP-FPM management
+│   ├── extensions.sh     # PHP extensions management
+│   ├── auto-switch.sh    # Auto-switching functionality
+│   └── commands.sh       # Command-line options
+├── config/
+│   └── defaults.sh       # Default configuration values
+├── tools/
+│   └── fix-permissions.sh # Permission repair utility
+├── php-switcher.sh       # Main script file
+├── LICENSE               # MIT License
+└── README.md             # This documentation
+```
+
+## Configuration
+
+PHPSwitch supports user configuration through a `~/.phpswitch.conf` file:
+
+```bash
+# PHPSwitch Configuration
+AUTO_RESTART_PHP_FPM=true       # Automatically restart PHP-FPM when switching versions
+BACKUP_CONFIG_FILES=true        # Create backups of shell config files before modifying
+DEFAULT_PHP_VERSION=""          # Default PHP version to use (empty means none)
+MAX_BACKUPS=5                   # Maximum number of backup files to keep
+AUTO_SWITCH_PHP_VERSION=false   # Enable automatic PHP version switching by directory
+CACHE_DIRECTORY=""              # Optional custom cache directory location
+```
+
+You can edit this file directly or use the built-in configuration menu.
 
 ## Contributing
 

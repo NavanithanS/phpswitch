@@ -384,16 +384,37 @@ function utils_check_dependencies {
         echo "You may need to use sudo for some operations."
     fi
     
-    # Verify cache directory exists and is writable
+    # Check cache directory
     local cache_dir="$HOME/.cache/phpswitch"
     if [ ! -d "$cache_dir" ]; then
-        mkdir -p "$cache_dir" 2>/dev/null || {
+        # Try to create the cache directory
+        mkdir -p "$cache_dir" 2>/dev/null
+        if [ $? -ne 0 ]; then
             utils_show_status "warning" "Could not create cache directory: $cache_dir"
-            echo "Some caching features may not work correctly."
-        }
+            echo "This is a non-critical issue. PHPSwitch will use temporary directories instead."
+            echo "To fix this permanently, run: mkdir -p $cache_dir"
+        fi
     elif [ ! -w "$cache_dir" ]; then
         utils_show_status "warning" "Cache directory is not writable: $cache_dir"
-        echo "Some caching features may not work correctly."
+        echo "This is a non-critical issue. PHPSwitch will use temporary directories instead."
+        echo -n "Would you like to fix the permissions now? (y/n): "
+        if [ "$(utils_validate_yes_no "Fix permissions?" "y")" = "y" ]; then
+            # Try to fix permissions without sudo first
+            chmod u+w "$cache_dir" 2>/dev/null
+            if [ ! -w "$cache_dir" ]; then
+                # If that fails, try with sudo
+                echo "Attempting to fix permissions with sudo..."
+                sudo chmod u+w "$cache_dir" 2>/dev/null
+                if [ ! -w "$cache_dir" ]; then
+                    utils_show_status "error" "Could not fix permissions even with sudo"
+                    echo "You can manually fix this with: sudo chmod u+w $cache_dir"
+                else
+                    utils_show_status "success" "Permissions fixed with sudo"
+                fi
+            else
+                utils_show_status "success" "Permissions fixed"
+            }
+        fi
     fi
     
     utils_show_status "success" "All critical dependencies satisfied"
