@@ -13,7 +13,7 @@ function cmd_parse_arguments {
     # Skip dependency check for basic commands
     if [ "$1" != "--version" ] && [ "$1" != "-v" ] && 
        [ "$1" != "--help" ] && [ "$1" != "-h" ] && 
-       [ "$1" != "--check-dependencies" ]; then
+       [ "$1" != "--check-dependencies" ] && [ "$1" != "--fix-permissions" ]; then
         # Check dependencies
         utils_check_dependencies || {
             utils_show_status "error" "Dependency check failed. Please resolve issues before proceeding."
@@ -54,6 +54,9 @@ function cmd_parse_arguments {
     elif [ "$1" = "--clear-cache" ]; then
         cmd_clear_phpswitch_cache
         exit 0
+    elif [ "$1" = "--fix-permissions" ]; then
+        cmd_fix_permissions
+        exit $?
     elif [ "$1" = "--check-dependencies" ]; then
         utils_check_dependencies
         exit $?
@@ -144,6 +147,7 @@ function cmd_parse_arguments {
         echo "  phpswitch --project, -p        - Switch to the PHP version specified in project file"
         echo "  phpswitch --clear-cache        - Clear cached data"
         echo "  phpswitch --refresh-cache      - Refresh cache of available PHP versions"
+        echo "  phpswitch --fix-permissions    - Fix cache directory permission issues"
         echo "  phpswitch --install-auto-switch - Enable automatic PHP switching based on directory"
         echo "  phpswitch --clear-directory-cache - Clear auto-switching directory cache"
         echo "  phpswitch --check-dependencies - Check system for required dependencies"
@@ -384,16 +388,161 @@ function cmd_list_php_versions {
     fi
 }
 
+# Function to execute the fix-permissions script
+function cmd_fix_permissions {
+    utils_show_status "info" "Running permission fix tool..."
+    
+    # Determine script directory location
+    local script_dir="$(dirname "$(realpath "$0" 2>/dev/null || echo "$0")")"
+    local fix_script="$script_dir/tools/fix-permissions.sh"
+    
+    if [ -f "$fix_script" ]; then
+        # Execute the fix-permissions script
+        bash "$fix_script"
+        return $?
+    else
+        # If script not found in the expected location, try to create a temporary one
+        utils_show_status "warning" "Fix permissions script not found at $fix_script"
+        echo "Creating a temporary permissions fix script..."
+        
+        local temp_script=$(mktemp)
+        cat > "$temp_script" << 'EOL'
+#!/bin/bash
+# Temporary fix permissions script for PHPSwitch cache directory
+
+CACHE_DIR="$HOME/.cache/phpswitch"
+ALT_CACHE_DIR="$HOME/.phpswitch_cache"
+CONFIG_FILE="$HOME/.phpswitch.conf"
+USERNAME=$(whoami)
+
+echo "PHPSwitch Permission Fix Tool"
+echo "============================"
+echo ""
+
+# Try to fix permissions on standard cache directory
+if [ -d "$CACHE_DIR" ]; then
+    echo "Fixing permissions for: $CACHE_DIR"
+    
+    # Method 1: Standard chmod
+    chmod -v u+w "$CACHE_DIR" 2>/dev/null
+    
+    if [ -w "$CACHE_DIR" ]; then
+        echo "✅ Permissions fixed successfully!"
+        exit 0
+    fi
+    
+    # Method 2: Sudo chmod
+    echo "Trying with sudo..."
+    sudo chmod -v u+w "$CACHE_DIR" 2>/dev/null
+    
+    if [ -w "$CACHE_DIR" ]; then
+        echo "✅ Permissions fixed successfully with sudo!"
+        exit 0
+    fi
+    
+    # Method 3: Change ownership
+    echo "Trying to change ownership..."
+    sudo chown -v "$USERNAME" "$CACHE_DIR" 2>/dev/null
+    
+    if [ -w "$CACHE_DIR" ]; then
+        echo "✅ Ownership changed, directory is now writable!"
+        exit 0
+    fi
+    
+    # Method 4: Recreate directory
+    echo "Recreating directory..."
+    sudo rm -rf "$CACHE_DIR" 2>/dev/null
+    mkdir -p "$CACHE_DIR" 2>/dev/null
+    
+    if [ -d "$CACHE_DIR" ] && [ -w "$CACHE_DIR" ]; then
+        echo "✅ Directory successfully recreated!"
+        exit 0
+    fi
+fi
+
+# Use alternative directory in home folder
+echo "Creating alternative cache directory: $ALT_CACHE_DIR"
+mkdir -p "$ALT_CACHE_DIR" 2>/dev/null
+
+if [ -d "$ALT_CACHE_DIR" ] && [ -w "$ALT_CACHE_DIR" ]; then
+    echo "✅ Alternative directory created successfully!"
+    
+    # Update configuration
+    if [ -f "$CONFIG_FILE" ]; then
+        if grep -q "CACHE_DIRECTORY=" "$CONFIG_FILE"; then
+            sed -i.bak "s|CACHE_DIRECTORY=.*|CACHE_DIRECTORY=\"$ALT_CACHE_DIR\"|g" "$CONFIG_FILE"
+            rm -f "$CONFIG_FILE.bak" 2>/dev/null
+        else
+            echo "CACHE_DIRECTORY=\"$ALT_CACHE_DIR\"" >> "$CONFIG_FILE"
+        fi
+    else
+        cat > "$CONFIG_FILE" << CONF
+# PHPSwitch Configuration
+AUTO_RESTART_PHP_FPM=true
+BACKUP_CONFIG_FILES=true
+DEFAULT_PHP_VERSION=""
+MAX_BACKUPS=5
+AUTO_SWITCH_PHP_VERSION=false
+CACHE_DIRECTORY="$ALT_CACHE_DIR"
+CONF
+    fi
+    echo "✅ Configuration updated to use alternative cache directory!"
+    exit 0
+else
+    echo "❌ Failed to create alternative directory!"
+    
+    # Last resort: use temporary directory
+    TMP_DIR="/tmp/phpswitch_cache_$(whoami)"
+    echo "Using temporary directory as last resort: $TMP_DIR"
+    mkdir -p "$TMP_DIR" 2>/dev/null
+    
+    if [ -d "$TMP_DIR" ] && [ -w "$TMP_DIR" ]; then
+        if [ -f "$CONFIG_FILE" ]; then
+            if grep -q "CACHE_DIRECTORY=" "$CONFIG_FILE"; then
+                sed -i.bak "s|CACHE_DIRECTORY=.*|CACHE_DIRECTORY=\"$TMP_DIR\"|g" "$CONFIG_FILE"
+                rm -f "$CONFIG_FILE.bak" 2>/dev/null
+            else
+                echo "CACHE_DIRECTORY=\"$TMP_DIR\"" >> "$CONFIG_FILE"
+            fi
+        else
+            cat > "$CONFIG_FILE" << CONF
+# PHPSwitch Configuration
+AUTO_RESTART_PHP_FPM=true
+BACKUP_CONFIG_FILES=true
+DEFAULT_PHP_VERSION=""
+MAX_BACKUPS=5
+AUTO_SWITCH_PHP_VERSION=false
+CACHE_DIRECTORY="$TMP_DIR"
+CONF
+        fi
+        echo "✅ Configuration updated to use temporary directory!"
+        echo "⚠️  Note: Cache will be cleared on system reboot"
+        exit 0
+    fi
+    
+    echo "❌ All attempts to fix permissions failed!"
+    echo "Please manually create a config file at $CONFIG_FILE and set CACHE_DIRECTORY to a writable location."
+    exit 1
+fi
+EOL
+        
+        chmod +x "$temp_script"
+        bash "$temp_script"
+        local result=$?
+        rm -f "$temp_script"
+        return $result
+    fi
+}
+
 # Add cache management functions
 function cmd_clear_phpswitch_cache {
-    local cache_dir="$HOME/.cache/phpswitch"
+    local cache_dir=$(core_get_cache_dir)
     
     if [ -d "$cache_dir" ]; then
         echo -n "Are you sure you want to clear phpswitch cache? (y/n): "
         if [ "$(utils_validate_yes_no "Clear cache?" "y")" = "y" ]; then
-            rm -rf "$cache_dir"
-            mkdir -p "$cache_dir"
-            utils_show_status "success" "Cleared phpswitch cache"
+            core_clear_cache
+            utils_show_status "success" "Cleared phpswitch cache from $cache_dir"
         else
             utils_show_status "info" "Cache clearing cancelled"
         fi

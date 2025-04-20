@@ -25,6 +25,7 @@ function core_load_config {
     DEFAULT_PHP_VERSION=""
     MAX_BACKUPS=5
     AUTO_SWITCH_PHP_VERSION=false
+    CACHE_DIRECTORY=""  # Empty means use default location
     
     # Load settings if config exists
     if [ -f "$CONFIG_FILE" ]; then
@@ -45,6 +46,7 @@ BACKUP_CONFIG_FILES=true
 DEFAULT_PHP_VERSION=""
 MAX_BACKUPS=5
 AUTO_SWITCH_PHP_VERSION=false
+CACHE_DIRECTORY=""
 EOL
         utils_show_status "success" "Created default configuration at ~/.phpswitch.conf"
     fi
@@ -56,24 +58,82 @@ function core_get_installed_php_versions {
     { brew list | grep "^php@" || true; brew list | grep "^php$" | sed 's/php/php@default/g' || true; } | sort
 }
 
-# Enhanced get_available_php_versions function with persistent caching and better error handling
-function core_get_available_php_versions {
-    # Create a more persistent cache location
-    local cache_dir="$HOME/.cache/phpswitch"
-    
-    # Try to create the cache directory, continue even if it fails
-    mkdir -p "$cache_dir" 2>/dev/null
-    
-    # Check if we can write to the cache directory
-    local cache_writable=true
-    if [ ! -w "$cache_dir" ] 2>/dev/null; then
-        cache_writable=false
-        core_debug_log "Cache directory is not writable: $cache_dir"
-        # Use a fallback directory in /tmp for temporary storage
-        cache_dir=$(mktemp -d /tmp/phpswitch.XXXXXX)
-        core_debug_log "Using fallback cache directory: $cache_dir"
+# Function to get and manage the cache directory with better error handling
+function core_get_cache_dir {
+    # Check if custom cache directory is set in config
+    if [ -n "$CACHE_DIRECTORY" ]; then
+        # Use custom location from config
+        local cache_dir="$CACHE_DIRECTORY"
+        
+        # Try to create it if it doesn't exist
+        if [ ! -d "$cache_dir" ]; then
+            mkdir -p "$cache_dir" 2>/dev/null
+            if [ $? -ne 0 ]; then
+                core_debug_log "Failed to create custom cache directory: $cache_dir"
+                # Fallback to temporary directory
+                cache_dir=$(mktemp -d /tmp/phpswitch.XXXXXX)
+                core_debug_log "Using fallback temporary directory: $cache_dir"
+            fi
+        # Check if custom dir is writable
+        elif [ ! -w "$cache_dir" ]; then
+            core_debug_log "Custom cache directory is not writable: $cache_dir"
+            # Fallback to temporary directory
+            cache_dir=$(mktemp -d /tmp/phpswitch.XXXXXX)
+            core_debug_log "Using fallback temporary directory: $cache_dir"
+        fi
+    else
+        # Use default location
+        local cache_dir="$HOME/.cache/phpswitch"
+        
+        # Try to create the cache directory
+        if [ ! -d "$cache_dir" ]; then
+            mkdir -p "$cache_dir" 2>/dev/null
+        fi
+        
+        # Check if we can write to the default cache directory
+        if [ ! -w "$cache_dir" ] 2>/dev/null; then
+            core_debug_log "Default cache directory is not writable: $cache_dir"
+            
+            # Try these alternatives in order:
+            
+            # 1. Try ~/.phpswitch_cache in home directory 
+            local alt_cache="$HOME/.phpswitch_cache"
+            if [ ! -d "$alt_cache" ]; then
+                mkdir -p "$alt_cache" 2>/dev/null
+            fi
+            
+            if [ -d "$alt_cache" ] && [ -w "$alt_cache" ]; then
+                cache_dir="$alt_cache"
+                core_debug_log "Using alternative cache in home directory: $cache_dir"
+                
+                # Save this location to config for future use
+                if [ -f "$HOME/.phpswitch.conf" ]; then
+                    if grep -q "CACHE_DIRECTORY=" "$HOME/.phpswitch.conf"; then
+                        sed -i.bak "s|CACHE_DIRECTORY=.*|CACHE_DIRECTORY=\"$alt_cache\"|g" "$HOME/.phpswitch.conf"
+                        rm -f "$HOME/.phpswitch.conf.bak" 2>/dev/null
+                    else
+                        echo "CACHE_DIRECTORY=\"$alt_cache\"" >> "$HOME/.phpswitch.conf"
+                    fi
+                else
+                    # Create config file if it doesn't exist
+                    core_create_default_config
+                    echo "CACHE_DIRECTORY=\"$alt_cache\"" >> "$HOME/.phpswitch.conf"
+                fi
+            else
+                # 2. Use a temporary directory as last resort
+                cache_dir=$(mktemp -d /tmp/phpswitch.XXXXXX)
+                core_debug_log "Using temporary directory as fallback: $cache_dir"
+            fi
     fi
     
+    # Return the resolved cache directory
+    echo "$cache_dir"
+}
+
+# Enhanced get_available_php_versions function with persistent caching and better error handling
+function core_get_available_php_versions {
+    # Get the appropriate cache directory
+    local cache_dir=$(core_get_cache_dir)
     local cache_file="$cache_dir/available_versions.cache"
     local cache_timeout=3600  # Cache expires after 1 hour (in seconds)
     
@@ -133,12 +193,7 @@ function core_get_available_php_versions {
     }
     
     # Create a temporary file for the new cache
-    local temp_cache_file
-    if [ "$cache_writable" = "true" ]; then
-        temp_cache_file="$cache_dir/available_versions.cache.tmp"
-    else
-        temp_cache_file=$(mktemp /tmp/phpswitch_versions.XXXXXX)
-    fi
+    local temp_cache_file=$(mktemp)
     
     # Try to get actual versions with a timeout
     (
@@ -146,8 +201,8 @@ function core_get_available_php_versions {
         core_debug_log "Searching for PHP versions with Homebrew..."
         {
             # Use temp files for output
-            local search_file1=$(mktemp /tmp/phpswitch_search1.XXXXXX)
-            local search_file2=$(mktemp /tmp/phpswitch_search2.XXXXXX)
+            local search_file1=$(mktemp)
+            local search_file2=$(mktemp)
             
             # Run searches in background
             brew search /php@[0-9]/ 2>/dev/null | grep '^php@' > "$search_file1" & 
@@ -189,10 +244,12 @@ function core_get_available_php_versions {
             core_fallback_php_versions > "$temp_cache_file"
         }
         
-        # Move temporary cache to final location if we can write to cache dir
-        if [ "$cache_writable" = "true" ]; then
+        # Try to move temporary cache to final location
+        if [ -d "$cache_dir" ] && [ -w "$cache_dir" ]; then
             mv "$temp_cache_file" "$cache_file" 2>/dev/null || core_debug_log "Failed to move cache file"
             core_debug_log "Updated PHP versions cache at $cache_file"
+        else
+            core_debug_log "Cache directory is not writable, using temporary file only"
         fi
     ) &
     
@@ -217,10 +274,8 @@ function core_get_available_php_versions {
     # Output the results
     if [ -f "$temp_cache_file" ]; then
         cat "$temp_cache_file" 2>/dev/null
-        # Clean up temp file if not in cache dir
-        if [ "$cache_writable" = "false" ]; then
-            rm -f "$temp_cache_file" 2>/dev/null
-        fi
+        # Clean up temp file
+        rm -f "$temp_cache_file" 2>/dev/null
     elif [ -f "$cache_file" ]; then
         cat "$cache_file" 2>/dev/null
     else
@@ -305,5 +360,17 @@ function core_check_php_installed {
         return 0
     else
         return 1
+    fi
+}
+
+# Function to clear cache
+function core_clear_cache {
+    local cache_dir=$(core_get_cache_dir)
+    
+    if [ -d "$cache_dir" ]; then
+        rm -f "$cache_dir"/*.cache "$cache_dir"/directory_cache.txt 2>/dev/null
+        utils_show_status "success" "Cache cleared successfully from $cache_dir"
+    else
+        utils_show_status "warning" "No cache directory found at $cache_dir"
     fi
 }

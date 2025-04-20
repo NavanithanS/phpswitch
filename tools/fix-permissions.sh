@@ -1,4 +1,18 @@
 #!/bin/bash
+# Script to set up the tools directory and install the fix-permissions script
+
+# Determine script location
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# Create tools directory if it doesn't exist
+TOOLS_DIR="$SCRIPT_DIR/tools"
+mkdir -p "$TOOLS_DIR" 2>/dev/null
+
+# Create the fix-permissions.sh script in the tools directory
+FIX_SCRIPT="$TOOLS_DIR/fix-permissions.sh"
+
+cat > "$FIX_SCRIPT" << 'EOL'
+#!/bin/bash
 # Enhanced script to fix persistent permission issues with PHPSwitch cache directory
 
 # ANSI color codes
@@ -15,6 +29,7 @@ echo ""
 # Define the cache directory and parent directory
 CACHE_DIR="$HOME/.cache/phpswitch"
 PARENT_DIR="$HOME/.cache"
+CONFIG_FILE="$HOME/.phpswitch.conf"
 USERNAME=$(whoami)
 
 # Function to check and display permissions
@@ -78,51 +93,66 @@ else
             if [ -w "$CACHE_DIR" ]; then
                 echo -e "${GREEN}Ownership changed successfully, directory is now writable.${NC}"
             else
-                # Solution 4: Recreate the directory completely
-                echo -e "\nSolution 4: Recreating the directory completely..."
+                # Solution 4: Try removing extended attributes or ACLs
+                echo -e "\nSolution 4: Removing extended attributes and ACLs..."
                 
-                # Backup any existing files
-                BACKUP_DIR="/tmp/phpswitch_backup_$(date +%s)"
-                mkdir -p "$BACKUP_DIR"
-                echo "Backing up any existing files to $BACKUP_DIR"
-                
-                if [ -d "$CACHE_DIR" ]; then
-                    cp -r "$CACHE_DIR"/* "$BACKUP_DIR"/ 2>/dev/null
+                if command -v xattr &>/dev/null; then
+                    sudo xattr -c "$CACHE_DIR" 2>/dev/null
                 fi
                 
-                # Remove and recreate
-                sudo rm -rf "$CACHE_DIR" 2>/dev/null
-                if sudo mkdir -p "$CACHE_DIR" && sudo chown "$USERNAME" "$CACHE_DIR" && sudo chmod 755 "$CACHE_DIR"; then
-                    echo -e "${GREEN}Directory successfully recreated with proper permissions.${NC}"
-                    
-                    # Restore any backed up files
-                    cp -r "$BACKUP_DIR"/* "$CACHE_DIR"/ 2>/dev/null
+                if command -v chmod &>/dev/null; then
+                    sudo chmod -N "$CACHE_DIR" 2>/dev/null # Remove ACLs on macOS
+                fi
+                
+                if [ -w "$CACHE_DIR" ]; then
+                    echo -e "${GREEN}Extended attributes/ACLs removed, directory is now writable.${NC}"
                 else
-                    # Solution 5: Create in a different location
-                    echo -e "\nSolution 5: Creating cache directory in an alternative location..."
+                    # Solution 5: Recreate the directory completely
+                    echo -e "\nSolution 5: Recreating the directory completely..."
                     
-                    # Define alternative location in user's home directory
-                    ALT_CACHE_DIR="$HOME/.phpswitch_cache"
+                    # Backup any existing files
+                    BACKUP_DIR="/tmp/phpswitch_backup_$(date +%s)"
+                    mkdir -p "$BACKUP_DIR"
+                    echo "Backing up any existing files to $BACKUP_DIR"
                     
-                    if mkdir -p "$ALT_CACHE_DIR"; then
-                        echo -e "${GREEN}Alternative cache directory created successfully at:${NC} $ALT_CACHE_DIR"
+                    if [ -d "$CACHE_DIR" ]; then
+                        cp -r "$CACHE_DIR"/* "$BACKUP_DIR"/ 2>/dev/null
+                    fi
+                    
+                    # Remove and recreate
+                    sudo rm -rf "$CACHE_DIR" 2>/dev/null
+                    mkdir -p "$CACHE_DIR" 2>/dev/null
+                    
+                    if [ -d "$CACHE_DIR" ] && [ -w "$CACHE_DIR" ]; then
+                        echo -e "${GREEN}Directory successfully recreated with proper permissions.${NC}"
                         
-                        # Create a configuration file to tell phpswitch to use this directory
-                        CONFIG_FILE="$HOME/.phpswitch.conf"
+                        # Restore any backed up files
+                        cp -r "$BACKUP_DIR"/* "$CACHE_DIR"/ 2>/dev/null
+                    else
+                        # Solution 6: Create in a different location
+                        echo -e "\nSolution 6: Creating cache directory in an alternative location..."
                         
-                        if [ -f "$CONFIG_FILE" ]; then
-                            # Backup the existing config
-                            cp "$CONFIG_FILE" "${CONFIG_FILE}.bak.$(date +%s)"
+                        # Define alternative location in user's home directory
+                        ALT_CACHE_DIR="$HOME/.phpswitch_cache"
+                        
+                        if mkdir -p "$ALT_CACHE_DIR"; then
+                            echo -e "${GREEN}Alternative cache directory created successfully at:${NC} $ALT_CACHE_DIR"
                             
-                            # Add or update cache directory setting
-                            if grep -q "CACHE_DIRECTORY=" "$CONFIG_FILE"; then
-                                sed -i '' "s|CACHE_DIRECTORY=.*|CACHE_DIRECTORY=\"$ALT_CACHE_DIR\"|g" "$CONFIG_FILE"
+                            # Create or update configuration file to use this directory
+                            if [ -f "$CONFIG_FILE" ]; then
+                                # Backup the existing config
+                                cp "$CONFIG_FILE" "${CONFIG_FILE}.bak.$(date +%s)"
+                                
+                                # Add or update cache directory setting
+                                if grep -q "CACHE_DIRECTORY=" "$CONFIG_FILE"; then
+                                    sed -i.tmp "s|CACHE_DIRECTORY=.*|CACHE_DIRECTORY=\"$ALT_CACHE_DIR\"|g" "$CONFIG_FILE"
+                                    rm -f "$CONFIG_FILE.tmp"
+                                else
+                                    echo "CACHE_DIRECTORY=\"$ALT_CACHE_DIR\"" >> "$CONFIG_FILE"
+                                fi
                             else
-                                echo "CACHE_DIRECTORY=\"$ALT_CACHE_DIR\"" >> "$CONFIG_FILE"
-                            fi
-                        else
-                            # Create a new config file
-                            cat > "$CONFIG_FILE" << EOL
+                                # Create a new config file
+                                cat > "$CONFIG_FILE" << EOL
 # PHPSwitch Configuration
 AUTO_RESTART_PHP_FPM=true
 BACKUP_CONFIG_FILES=true
@@ -131,16 +161,54 @@ MAX_BACKUPS=5
 AUTO_SWITCH_PHP_VERSION=false
 CACHE_DIRECTORY="$ALT_CACHE_DIR"
 EOL
+                            fi
+                            
+                            echo -e "${GREEN}PHPSwitch configured to use the alternative cache directory.${NC}"
+                            echo "You should now be able to run phpswitch without permission errors."
+                        else
+                            echo -e "${RED}Failed to create alternative cache directory.${NC}"
+                            echo "This is a serious permission issue with your user account."
+                            echo -e "\nEmergency solution: Update the PHPSwitch configuration file"
+                            
+                            # Try to create a tmp directory as a last resort
+                            TMP_CACHE_DIR="/tmp/phpswitch_cache_$USERNAME"
+                            mkdir -p "$TMP_CACHE_DIR" 2>/dev/null
+                            
+                            if [ -d "$TMP_CACHE_DIR" ] && [ -w "$TMP_CACHE_DIR" ]; then
+                                echo "Created temporary cache directory at: $TMP_CACHE_DIR"
+                                
+                                # Update config file to use tmp directory
+                                if [ -f "$CONFIG_FILE" ]; then
+                                    # Backup the existing config
+                                    cp "$CONFIG_FILE" "${CONFIG_FILE}.bak.$(date +%s)"
+                                    
+                                    # Add or update cache directory setting
+                                    if grep -q "CACHE_DIRECTORY=" "$CONFIG_FILE"; then
+                                        sed -i.tmp "s|CACHE_DIRECTORY=.*|CACHE_DIRECTORY=\"$TMP_CACHE_DIR\"|g" "$CONFIG_FILE"
+                                        rm -f "$CONFIG_FILE.tmp"
+                                    else
+                                        echo "CACHE_DIRECTORY=\"$TMP_CACHE_DIR\"" >> "$CONFIG_FILE"
+                                    fi
+                                else
+                                    # Create a new config file
+                                    cat > "$CONFIG_FILE" << EOL
+# PHPSwitch Configuration
+AUTO_RESTART_PHP_FPM=true
+BACKUP_CONFIG_FILES=true
+DEFAULT_PHP_VERSION=""
+MAX_BACKUPS=5
+AUTO_SWITCH_PHP_VERSION=false
+CACHE_DIRECTORY="$TMP_CACHE_DIR"
+EOL
+                                fi
+                                
+                                echo -e "${YELLOW}PHPSwitch configured to use a temporary directory.${NC}"
+                                echo "Note: Cache will be cleared on system reboot."
+                            else
+                                echo -e "${RED}All attempts to create a writable cache directory failed.${NC}"
+                                echo "Please manually modify $CONFIG_FILE to set CACHE_DIRECTORY to a writable location."
+                            fi
                         fi
-                        
-                        echo -e "${GREEN}PHPSwitch configured to use the alternative cache directory.${NC}"
-                        echo "You should now be able to run phpswitch without permission errors."
-                    else
-                        echo -e "${RED}Failed to create alternative cache directory.${NC}"
-                        echo "This is a serious permission issue with your user account."
-                        echo -e "\nEmergency solution: Update the PHPSwitch core.sh file"
-                        echo "Edit the lib/core.sh file and replace the cache_dir line with:"
-                        echo "local cache_dir=\"\$(mktemp -d /tmp/phpswitch.XXXXXX)\""
                     fi
                 fi
             fi
@@ -149,12 +217,11 @@ EOL
 fi
 
 # Verify write access
-if [ -w "$CACHE_DIR" ] || [ -n "$ALT_CACHE_DIR" -a -w "$ALT_CACHE_DIR" ]; then
-    # Determine which directory to use
-    TEST_DIR=${ALT_CACHE_DIR:-$CACHE_DIR}
-    
+VERIFY_DIR=${ALT_CACHE_DIR:-${TMP_CACHE_DIR:-$CACHE_DIR}}
+
+if [ -d "$VERIFY_DIR" ] && [ -w "$VERIFY_DIR" ]; then
     echo -e "\nStep 4: Verifying write access..."
-    TEST_FILE="$TEST_DIR/test_file"
+    TEST_FILE="$VERIFY_DIR/test_file"
     
     if touch "$TEST_FILE" 2>/dev/null; then
         echo -e "${GREEN}Write test successful.${NC}"
@@ -162,49 +229,74 @@ if [ -w "$CACHE_DIR" ] || [ -n "$ALT_CACHE_DIR" -a -w "$ALT_CACHE_DIR" ]; then
         
         # Clean existing cache files to ensure a fresh start
         echo -e "\nStep 5: Cleaning existing cache files..."
-        rm -f "$TEST_DIR"/*.cache "$TEST_DIR"/directory_cache.txt
+        rm -f "$VERIFY_DIR"/*.cache "$VERIFY_DIR"/directory_cache.txt 2>/dev/null
         
         # Create empty cache files with correct permissions
-        touch "$TEST_DIR/available_versions.cache"
-        touch "$TEST_DIR/directory_cache.txt"
+        touch "$VERIFY_DIR/available_versions.cache" 2>/dev/null
+        touch "$VERIFY_DIR/directory_cache.txt" 2>/dev/null
         
         echo -e "\n${GREEN}All permission issues have been fixed successfully!${NC}"
+        echo -e "PHPSwitch will now use the cache directory: ${BLUE}$VERIFY_DIR${NC}"
         
-        if [ -n "$ALT_CACHE_DIR" ]; then
-            echo -e "PHPSwitch will now use the alternative cache directory: ${BLUE}$ALT_CACHE_DIR${NC}"
-        else
-            echo -e "The standard cache directory is now usable: ${BLUE}$CACHE_DIR${NC}"
+        # If we're using a different directory, make sure we update the config file
+        if [ "$VERIFY_DIR" != "$CACHE_DIR" ] && [ ! -f "$CONFIG_FILE" ]; then
+            echo -e "\nCreating config file to use the new directory location..."
+            cat > "$CONFIG_FILE" << EOL
+# PHPSwitch Configuration
+AUTO_RESTART_PHP_FPM=true
+BACKUP_CONFIG_FILES=true
+DEFAULT_PHP_VERSION=""
+MAX_BACKUPS=5
+AUTO_SWITCH_PHP_VERSION=false
+CACHE_DIRECTORY="$VERIFY_DIR"
+EOL
+            echo -e "${GREEN}Configuration file created at:${NC} $CONFIG_FILE"
         fi
     else
         echo -e "${RED}Write test failed. Still having permission issues.${NC}"
-        echo -e "\nExtreme solution: Running PHPSwitch with temporary directories"
+        echo -e "\nExtreme solution: Using system temporary directory"
         echo "PHPSwitch can be updated to always use temporary directories:"
-        echo "1. Edit lib/core.sh"
-        echo "2. Find the line that defines cache_dir"
-        echo "3. Change it to: local cache_dir=\$(mktemp -d /tmp/phpswitch.XXXXXX)"
+        echo "1. Create or edit $CONFIG_FILE"
+        echo "2. Add this line: CACHE_DIRECTORY=\"\$(mktemp -d /tmp/phpswitch.XXXXXX)\""
         
-        echo -e "\nAdditional diagnostic information:"
-        echo "Operating system: $(uname -a)"
-        echo "File system for home directory:"
-        df -T "$HOME" 2>/dev/null || df -h "$HOME"
-        
-        echo -e "\nFile system permissions in .cache directory:"
-        ls -la "$HOME/.cache" | head -n 20
+        # Try to create the config file as a last resort
+        echo "Attempting to create config file with temporary directory setting..."
+        cat > "$CONFIG_FILE" << EOL
+# PHPSwitch Configuration
+AUTO_RESTART_PHP_FPM=true
+BACKUP_CONFIG_FILES=true
+DEFAULT_PHP_VERSION=""
+MAX_BACKUPS=5
+AUTO_SWITCH_PHP_VERSION=false
+CACHE_DIRECTORY="/tmp/phpswitch_$(date +%s)"
+EOL
+
+        if [ -f "$CONFIG_FILE" ]; then
+            echo -e "${GREEN}Created emergency configuration to use temporary directories.${NC}"
+            echo "You may need to run 'mkdir -p $(grep CACHE_DIRECTORY "$CONFIG_FILE" | cut -d '"' -f2)' before using phpswitch."
+        fi
     fi
 else
-    echo -e "\n${RED}Unable to fix permission issues through automatic means.${NC}"
+    echo -e "\n${RED}Unable to create any writable cache directory.${NC}"
     echo -e "Manual intervention required. Try these commands as a system administrator:"
     echo "sudo mkdir -p $CACHE_DIR"
     echo "sudo chown -R $USERNAME $CACHE_DIR"
     echo "sudo chmod -R 755 $CACHE_DIR"
     
-    echo -e "\nIf those fail, you can modify PHPSwitch to always use temporary directories:"
-    echo "1. Edit the core.sh file"
-    echo "2. Change the cache_dir line to use /tmp instead"
-    echo "3. Example: local cache_dir=\$(mktemp -d /tmp/phpswitch.XXXXXX)"
+    echo -e "\nAlternatively, create a configuration file at $CONFIG_FILE with the following content:"
+    echo "CACHE_DIRECTORY=\"/tmp/phpswitch_$USERNAME\""
+    echo "Then create the directory with: mkdir -p /tmp/phpswitch_$USERNAME"
 fi
 
-echo -e "\nIf you continue to experience issues, run phpswitch with debug mode:"
-echo "phpswitch --debug"
+echo -e "\nTo apply these changes, restart phpswitch or run:"
+echo "phpswitch --clear-cache"
 
 exit 0
+EOL
+
+# Make the script executable
+chmod +x "$FIX_SCRIPT"
+
+echo "Fix permissions script created at: $FIX_SCRIPT"
+echo "You can run it with: $FIX_SCRIPT"
+echo "Or with phpswitch: phpswitch --fix-permissions"

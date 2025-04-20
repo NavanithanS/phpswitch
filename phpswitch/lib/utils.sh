@@ -323,7 +323,7 @@ function utils_check_dependencies {
     fi
 
     # Check Homebrew version
-    local brew_version=$(brew --version | head -n 1 | grep -o "[0-9]\+\.[0-9]\+\.[0-9]\+")
+    local brew_version=$(brew --version | head -n 1 | grep -o "[0-9]\+\.[0-9]\+\.[0-9]\+" 2>/dev/null || echo "0.0.0")
     local min_version="3.0.0"
     
     # Basic version comparison
@@ -384,35 +384,122 @@ function utils_check_dependencies {
         echo "You may need to use sudo for some operations."
     fi
     
-    # Check cache directory
-    local cache_dir="$HOME/.cache/phpswitch"
-    if [ ! -d "$cache_dir" ]; then
-        # Try to create the cache directory
-        mkdir -p "$cache_dir" 2>/dev/null
-        if [ $? -ne 0 ]; then
-            utils_show_status "warning" "Could not create cache directory: $cache_dir"
-            echo "This is a non-critical issue. PHPSwitch will use temporary directories instead."
-            echo "To fix this permanently, run: mkdir -p $cache_dir"
+    # Enhanced cache directory check - using the core_get_cache_dir function
+    local cache_dir=$(core_get_cache_dir)
+    
+    # If the function returned a temporary directory, we've already fallen back
+    if [[ "$cache_dir" == /tmp/* ]]; then
+        utils_show_status "warning" "Using temporary cache directory: $cache_dir"
+        echo "Cache will be lost on system reboot. To fix permanently, run:"
+        echo "phpswitch --fix-permissions"
+        
+        # Try to create a more persistent cache directory for future use
+        local alt_cache="$HOME/.phpswitch_cache"
+        if [ ! -d "$alt_cache" ]; then
+            mkdir -p "$alt_cache" 2>/dev/null
+            if [ -d "$alt_cache" ] && [ -w "$alt_cache" ]; then
+                # Update config file for future runs
+                if [ -f "$HOME/.phpswitch.conf" ]; then
+                    if grep -q "CACHE_DIRECTORY=" "$HOME/.phpswitch.conf"; then
+                        sed -i.bak "s|CACHE_DIRECTORY=.*|CACHE_DIRECTORY=\"$alt_cache\"|g" "$HOME/.phpswitch.conf"
+                        rm -f "$HOME/.phpswitch.conf.bak" 2>/dev/null
+                    else
+                        echo "CACHE_DIRECTORY=\"$alt_cache\"" >> "$HOME/.phpswitch.conf"
+                    fi
+                else
+                    # Create config file if it doesn't exist
+                    cat > "$HOME/.phpswitch.conf" << EOL
+# PHPSwitch Configuration
+AUTO_RESTART_PHP_FPM=true
+BACKUP_CONFIG_FILES=true
+DEFAULT_PHP_VERSION=""
+MAX_BACKUPS=5
+AUTO_SWITCH_PHP_VERSION=false
+CACHE_DIRECTORY="$alt_cache"
+EOL
+                fi
+            fi
         fi
-    elif [ ! -w "$cache_dir" ]; then
+    # If we're using the standard cache directory but it's not writable
+    elif [ "$cache_dir" = "$HOME/.cache/phpswitch" ] && [ ! -w "$cache_dir" ]; then
         utils_show_status "warning" "Cache directory is not writable: $cache_dir"
         echo "This is a non-critical issue. PHPSwitch will use temporary directories instead."
         echo -n "Would you like to fix the permissions now? (y/n): "
         if [ "$(utils_validate_yes_no "Fix permissions?" "y")" = "y" ]; then
-            # Try to fix permissions without sudo first
-            chmod u+w "$cache_dir" 2>/dev/null
-            if [ ! -w "$cache_dir" ]; then
-                # If that fails, try with sudo
-                echo "Attempting to fix permissions with sudo..."
-                sudo chmod u+w "$cache_dir" 2>/dev/null
-                if [ ! -w "$cache_dir" ]; then
-                    utils_show_status "error" "Could not fix permissions even with sudo"
-                    echo "You can manually fix this with: sudo chmod u+w $cache_dir"
-                else
-                    utils_show_status "success" "Permissions fixed with sudo"
-                fi
+            # Check if we have the fix-permissions script
+            local script_dir="$(dirname "$(realpath "$0" 2>/dev/null || echo "$0")")"
+            local fix_script="$script_dir/tools/fix-permissions.sh"
+            
+            if [ -f "$fix_script" ]; then
+                utils_show_status "info" "Running permission fix script..."
+                bash "$fix_script"
             else
-                utils_show_status "success" "Permissions fixed"
+                # Try to fix permissions manually
+                utils_show_status "info" "Attempting to fix permissions manually..."
+                
+                # Try to fix with standard chmod first
+                chmod u+w "$cache_dir" 2>/dev/null
+                if [ ! -w "$cache_dir" ]; then
+                    # If that fails, try with sudo
+                    utils_show_status "info" "Trying with sudo..."
+                    sudo chmod u+w "$cache_dir" 2>/dev/null
+                    
+                    if [ ! -w "$cache_dir" ]; then
+                        # Try ownership change
+                        sudo chown "$(whoami)" "$cache_dir" 2>/dev/null
+                        
+                        if [ ! -w "$cache_dir" ]; then
+                            utils_show_status "error" "Could not fix permissions with standard methods"
+                            
+                            # Try to remove and recreate directory
+                            utils_show_status "info" "Trying to recreate the cache directory..."
+                            sudo rm -rf "$cache_dir" 2>/dev/null
+                            mkdir -p "$cache_dir" 2>/dev/null
+                            
+                            if [ ! -w "$cache_dir" ]; then
+                                # Create alternative directory
+                                local alt_cache="$HOME/.phpswitch_cache"
+                                mkdir -p "$alt_cache" 2>/dev/null
+                                
+                                if [ -d "$alt_cache" ] && [ -w "$alt_cache" ]; then
+                                    utils_show_status "success" "Created alternative cache directory: $alt_cache"
+                                    
+                                    # Update config file
+                                    if [ -f "$HOME/.phpswitch.conf" ]; then
+                                        if grep -q "CACHE_DIRECTORY=" "$HOME/.phpswitch.conf"; then
+                                            sed -i.bak "s|CACHE_DIRECTORY=.*|CACHE_DIRECTORY=\"$alt_cache\"|g" "$HOME/.phpswitch.conf"
+                                            rm -f "$HOME/.phpswitch.conf.bak" 2>/dev/null
+                                        else
+                                            echo "CACHE_DIRECTORY=\"$alt_cache\"" >> "$HOME/.phpswitch.conf"
+                                        fi
+                                    else
+                                        # Create config file if it doesn't exist
+                                        cat > "$HOME/.phpswitch.conf" << EOL
+# PHPSwitch Configuration
+AUTO_RESTART_PHP_FPM=true
+BACKUP_CONFIG_FILES=true
+DEFAULT_PHP_VERSION=""
+MAX_BACKUPS=5
+AUTO_SWITCH_PHP_VERSION=false
+CACHE_DIRECTORY="$alt_cache"
+EOL
+                                    fi
+                                else
+                                    utils_show_status "error" "Failed to create alternative cache directory"
+                                    echo "PHPSwitch will fall back to using temporary directories for this session."
+                                fi
+                            else
+                                utils_show_status "success" "Cache directory recreated successfully"
+                            fi
+                        else
+                            utils_show_status "success" "Permissions fixed by changing ownership"
+                        fi
+                    else
+                        utils_show_status "success" "Permissions fixed with sudo"
+                    fi
+                else
+                    utils_show_status "success" "Permissions fixed"
+                fi
             fi
         fi
     fi
