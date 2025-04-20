@@ -142,6 +142,7 @@ function core_get_cache_dir {
                 cache_dir=$(mktemp -d /tmp/phpswitch.XXXXXX)
                 core_debug_log "Using temporary directory as fallback: $cache_dir"
             fi
+        fi
     fi
     
     # Return the resolved cache directory
