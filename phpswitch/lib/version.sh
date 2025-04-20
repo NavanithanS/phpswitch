@@ -276,6 +276,11 @@ function version_uninstall_php {
     if brew services list | grep -q "$service_name"; then
         utils_show_status "info" "Stopping PHP-FPM service for $version..."
         brew services stop "$service_name"
+        
+        # Clean up service files to avoid issues on future installations
+        if command -v fpm_cleanup_service &>/dev/null; then
+            fpm_cleanup_service "$version"
+        fi
     fi
     
     # Unlink the PHP version if it's linked
