@@ -204,7 +204,7 @@ function fpm_restart {
                             utils_show_status "info" "Trying with sudo..."
                             sudo brew services start "$service_name"
                         fi
-                    }
+                    fi
                 else
                     echo -n "Would you like to try with sudo? (y/n): "
                     if [ "$(utils_validate_yes_no "Try with sudo?" "y")" = "y" ]; then
