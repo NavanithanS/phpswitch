@@ -88,10 +88,12 @@ phpswitch
 -   `phpswitch --json` - List PHP versions in JSON format
 -   `phpswitch --current` - Show current PHP version
 -   `phpswitch --project` or `-p` - Switch to the PHP version specified in project file
+-   `phpswitch --fix-permissions` - Fix cache directory permission issues
 -   `phpswitch --install-auto-switch` - Enable automatic PHP switching based on directory
 -   `phpswitch --clear-directory-cache` - Clear auto-switching directory cache
 -   `phpswitch --clear-cache` - Clear cached data
 -   `phpswitch --refresh-cache` - Refresh cache of available PHP versions
+-   `phpswitch --check-dependencies` - Check system for required dependencies
 -   `phpswitch --debug` - Runs script in debug mode with additional logging
 -   `phpswitch --help` or `phpswitch -h` - Displays help information
 
@@ -272,10 +274,28 @@ Select the `u` option from the main menu, then choose which version to uninstall
 If you encounter permission errors related to the cache directory, you can use the included permission fixing tool:
 
 ```bash
-./tools/fix-permissions.sh
+phpswitch --fix-permissions
 ```
 
-This will automatically repair common permission problems with the PHPSwitch cache and provide detailed information about what's happening.
+This will automatically:
+
+1. Try various methods to fix permissions on the default cache directory
+2. Create alternative cache locations if needed
+3. Update your configuration to use a writable location
+4. Verify that the solution works
+
+If the automatic fix doesn't work, you can manually set a custom cache directory in your configuration:
+
+```bash
+# In ~/.phpswitch.conf
+CACHE_DIRECTORY="$HOME/.custom_phpswitch_cache"
+```
+
+Then make sure that directory exists and is writable:
+
+```bash
+mkdir -p ~/.custom_phpswitch_cache
+```
 
 ### Common Issues
 
@@ -336,6 +356,7 @@ This tool helps you manage multiple PHP versions by:
 9. Offering self-update functionality to stay current
 10. Providing helpful feedback and error handling throughout the process
 11. Implementing robust permission handling with automatic fallbacks and repair tools
+12. Using smart cache handling with fallbacks for restrictive environments
 
 ### Auto-switching
 
@@ -394,7 +415,7 @@ BACKUP_CONFIG_FILES=true        # Create backups of shell config files before mo
 DEFAULT_PHP_VERSION=""          # Default PHP version to use (empty means none)
 MAX_BACKUPS=5                   # Maximum number of backup files to keep
 AUTO_SWITCH_PHP_VERSION=false   # Enable automatic PHP version switching by directory
-CACHE_DIRECTORY=""              # Optional custom cache directory location
+CACHE_DIRECTORY=""              # Optional custom cache directory location (empty means use default)
 ```
 
 You can edit this file directly or use the built-in configuration menu.
