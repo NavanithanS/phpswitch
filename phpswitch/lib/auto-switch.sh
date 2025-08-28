@@ -78,8 +78,15 @@ function auto_install_zsh {
     # Create backup before modifying
     if [ -f "$rc_file" ]; then
         local backup_file="${rc_file}.bak.$(date +%Y%m%d%H%M%S)"
-        cp "$rc_file" "$backup_file" 2>/dev/null
-        utils_show_status "info" "Created backup at ${backup_file}"
+        
+        # Validate backup file path
+        if utils_validate_path "$backup_file"; then
+            if cp "$rc_file" "$backup_file" 2>/dev/null; then
+                # Set secure permissions (readable/writable by owner only)
+                chmod 600 "$backup_file" 2>/dev/null
+                utils_show_status "info" "Created secure backup at ${backup_file}"
+            fi
+        fi
     fi
     
     # Add the hook function to the rc file
@@ -181,8 +188,15 @@ function auto_install_bash {
     # Create backup before modifying
     if [ -f "$rc_file" ]; then
         local backup_file="${rc_file}.bak.$(date +%Y%m%d%H%M%S)"
-        cp "$rc_file" "$backup_file" 2>/dev/null
-        utils_show_status "info" "Created backup at ${backup_file}"
+        
+        # Validate backup file path
+        if utils_validate_path "$backup_file"; then
+            if cp "$rc_file" "$backup_file" 2>/dev/null; then
+                # Set secure permissions (readable/writable by owner only)
+                chmod 600 "$backup_file" 2>/dev/null
+                utils_show_status "info" "Created secure backup at ${backup_file}"
+            fi
+        fi
     fi
     
     # Add the hook function to the rc file
@@ -279,8 +293,15 @@ function auto_install_fish {
     # Create backup before modifying
     if [ -f "$rc_file" ]; then
         local backup_file="${rc_file}.bak.$(date +%Y%m%d%H%M%S)"
-        cp "$rc_file" "$backup_file" 2>/dev/null
-        utils_show_status "info" "Created backup at ${backup_file}"
+        
+        # Validate backup file path
+        if utils_validate_path "$backup_file"; then
+            if cp "$rc_file" "$backup_file" 2>/dev/null; then
+                # Set secure permissions (readable/writable by owner only)
+                chmod 600 "$backup_file" 2>/dev/null
+                utils_show_status "info" "Created secure backup at ${backup_file}"
+            fi
+        fi
     fi
     
     # Add the hook function to the rc file

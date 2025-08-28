@@ -59,12 +59,26 @@ function fpm_cleanup_service {
     
     if [ -d "$cellar_path" ]; then
         utils_show_status "info" "Resetting permissions for: $cellar_path"
-        sudo chown -R $(whoami) "$cellar_path" 2>/dev/null
+        # Get secure username and validate it
+        local username
+        username="$(id -un)"
+        if utils_validate_username "$username"; then
+            sudo chown -R "$username" "$cellar_path" 2>/dev/null
+        else
+            utils_show_status "error" "Invalid username detected, skipping permission reset"
+        fi
     fi
     
     if [ -d "$opt_path" ]; then
         utils_show_status "info" "Resetting permissions for: $opt_path"
-        sudo chown -R $(whoami) "$opt_path" 2>/dev/null
+        # Get secure username and validate it
+        local username
+        username="$(id -un)"
+        if utils_validate_username "$username"; then
+            sudo chown -R "$username" "$opt_path" 2>/dev/null
+        else
+            utils_show_status "error" "Invalid username detected, skipping permission reset"
+        fi
     fi
     
     # Run brew services cleanup to clear stale services

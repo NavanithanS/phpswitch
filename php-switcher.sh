@@ -52,6 +52,21 @@ function core_load_config {
     else
         core_debug_log "No configuration file found at $CONFIG_FILE"
     fi
+    
+    # Validate Homebrew prefix for security
+    if [[ -z "$HOMEBREW_PREFIX" ]]; then
+        echo "Error: Could not determine Homebrew prefix" >&2
+        exit 1
+    fi
+    
+    # Basic validation for Homebrew prefix (more permissive than utils_validate_path)
+    if [[ "$HOMEBREW_PREFIX" != /* ]] || [[ "$HOMEBREW_PREFIX" == *".."* ]] || [[ ${#HOMEBREW_PREFIX} -gt 4096 ]]; then
+        echo "Error: Invalid Homebrew prefix path: $HOMEBREW_PREFIX" >&2
+        exit 1
+    fi
+    
+    # Setup automatic cleanup for temporary files
+    utils_setup_temp_cleanup_trap
 }
 
 # Create default configuration
@@ -212,7 +227,8 @@ function core_get_available_php_versions {
     }
     
     # Create a temporary file for the new cache
-    local temp_cache_file=$(mktemp)
+    local temp_cache_file
+    temp_cache_file=$(utils_create_secure_temp_file)
     
     # Try to get actual versions with a timeout
     (
@@ -220,8 +236,9 @@ function core_get_available_php_versions {
         core_debug_log "Searching for PHP versions with Homebrew..."
         {
             # Use temp files for output
-            local search_file1=$(mktemp)
-            local search_file2=$(mktemp)
+            local search_file1 search_file2
+            search_file1=$(utils_create_secure_temp_file)
+            search_file2=$(utils_create_secure_temp_file)
             
             # Run searches in background
             brew search /php@[0-9]/ 2>/dev/null | grep '^php@' > "$search_file1" & 
@@ -404,6 +421,159 @@ if [ -t 1 ]; then
         USE_COLORS=false
     fi
 fi
+
+# Security: Path validation functions
+function utils_validate_path {
+    local path="$1"
+    local allow_relative="${2:-false}"
+    
+    # Check for empty path
+    if [[ -z "$path" ]]; then
+        return 1
+    fi
+    
+    # Check for path traversal attempts
+    if [[ "$path" == *".."* ]]; then
+        core_debug_log "Path validation failed: path traversal detected in '$path'"
+        return 1
+    fi
+    
+    # Check for null bytes
+    if [[ "$path" == *$'\0'* ]]; then
+        core_debug_log "Path validation failed: null byte detected in '$path'"
+        return 1
+    fi
+    
+    # If relative paths are not allowed, ensure it's absolute
+    if [[ "$allow_relative" != "true" ]] && [[ "$path" != /* ]]; then
+        core_debug_log "Path validation failed: relative path not allowed '$path'"
+        return 1
+    fi
+    
+    # Check path length (prevent extremely long paths)
+    if [[ ${#path} -gt 4096 ]]; then
+        core_debug_log "Path validation failed: path too long '$path'"
+        return 1
+    fi
+    
+    # Check for potentially dangerous characters
+    if [[ "$path" =~ [[:cntrl:]] ]]; then
+        core_debug_log "Path validation failed: control characters detected in '$path'"
+        return 1
+    fi
+    
+    return 0
+}
+
+# Security: Validate PHP version string
+function utils_validate_version {
+    local version="$1"
+    
+    # Check for empty version
+    if [[ -z "$version" ]]; then
+        return 1
+    fi
+    
+    # Allow standard PHP version patterns: php@8.1, 8.1, php, etc.
+    if [[ "$version" =~ ^(php(@[0-9]+\.[0-9]+)?|[0-9]+\.[0-9]+|default)$ ]]; then
+        return 0
+    fi
+    
+    core_debug_log "Version validation failed: invalid version format '$version'"
+    return 1
+}
+
+# Security: Validate username string
+function utils_validate_username {
+    local username="$1"
+    
+    # Check for empty username
+    if [[ -z "$username" ]]; then
+        return 1
+    fi
+    
+    # Allow only alphanumeric characters, dots, underscores, and hyphens
+    if [[ "$username" =~ ^[a-zA-Z0-9._-]+$ ]] && [[ ${#username} -le 32 ]]; then
+        return 0
+    fi
+    
+    core_debug_log "Username validation failed: invalid username '$username'"
+    return 1
+}
+
+# Security: Array to track temporary files for cleanup
+declare -a TEMP_FILES_TO_CLEANUP=()
+declare -a TEMP_DIRS_TO_CLEANUP=()
+
+# Security: Create secure temporary file with automatic cleanup
+function utils_create_secure_temp_file {
+    local temp_file
+    temp_file=$(mktemp)
+    
+    if [[ -n "$temp_file" ]] && [[ -f "$temp_file" ]]; then
+        # Set secure permissions (readable/writable by owner only)
+        chmod 600 "$temp_file"
+        
+        # Track for cleanup
+        TEMP_FILES_TO_CLEANUP+=("$temp_file")
+        
+        echo "$temp_file"
+        return 0
+    else
+        core_debug_log "Failed to create secure temporary file"
+        return 1
+    fi
+}
+
+# Security: Create secure temporary directory with automatic cleanup
+function utils_create_secure_temp_dir {
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    
+    if [[ -n "$temp_dir" ]] && [[ -d "$temp_dir" ]]; then
+        # Set secure permissions (accessible by owner only)
+        chmod 700 "$temp_dir"
+        
+        # Track for cleanup
+        TEMP_DIRS_TO_CLEANUP+=("$temp_dir")
+        
+        echo "$temp_dir"
+        return 0
+    else
+        core_debug_log "Failed to create secure temporary directory"
+        return 1
+    fi
+}
+
+# Security: Cleanup all tracked temporary files and directories
+function utils_cleanup_temp_files {
+    local item
+    
+    # Clean up temporary files
+    for item in "${TEMP_FILES_TO_CLEANUP[@]}"; do
+        if [[ -f "$item" ]]; then
+            rm -f "$item" 2>/dev/null
+            core_debug_log "Cleaned up temporary file: $item"
+        fi
+    done
+    
+    # Clean up temporary directories
+    for item in "${TEMP_DIRS_TO_CLEANUP[@]}"; do
+        if [[ -d "$item" ]]; then
+            rm -rf "$item" 2>/dev/null
+            core_debug_log "Cleaned up temporary directory: $item"
+        fi
+    done
+    
+    # Clear the arrays
+    TEMP_FILES_TO_CLEANUP=()
+    TEMP_DIRS_TO_CLEANUP=()
+}
+
+# Security: Setup trap for automatic cleanup
+function utils_setup_temp_cleanup_trap {
+    trap 'utils_cleanup_temp_files; exit' INT TERM EXIT
+}
 
 # Function to display a spinning animation for long-running processes
 function utils_show_spinner {
@@ -841,7 +1011,14 @@ EOL
                     
                     if [ ! -w "$cache_dir" ]; then
                         # Try ownership change
-                        sudo chown "$(whoami)" "$cache_dir" 2>/dev/null
+                        # Get secure username and validate it
+                        local username
+                        username="$(id -un)"
+                        if utils_validate_username "$username"; then
+                            sudo chown "$username" "$cache_dir" 2>/dev/null
+                        else
+                            utils_show_status "error" "Invalid username detected, skipping ownership change"
+                        fi
                         
                         if [ ! -w "$cache_dir" ]; then
                             utils_show_status "error" "Could not fix permissions with standard methods"
@@ -937,8 +1114,9 @@ function utils_compare_versions {
 # PHPSwitch Shell Management
 # Handles shell detection and configuration file updates
 
-# Function to detect shell type with fish support
+# Function to detect shell type with enhanced detection
 function shell_detect_shell {
+    # First, check if we're in a specific shell based on environment variables
     if [ -n "$ZSH_VERSION" ]; then
         echo "zsh"
     elif [ -n "$BASH_VERSION" ]; then
@@ -946,41 +1124,91 @@ function shell_detect_shell {
     elif [ -n "$FISH_VERSION" ] || [[ "$SHELL" == *"fish" ]]; then
         echo "fish"
     else
-        echo "unknown"
+        # Fall back to checking the $SHELL variable
+        case "$SHELL" in
+            *zsh)
+                echo "zsh"
+                ;;
+            *bash)
+                echo "bash"
+                ;;
+            *fish)
+                echo "fish"
+                ;;
+            *)
+                # Default to a best guess based on OS
+                if [ "$(uname)" = "Darwin" ]; then
+                    echo "zsh"  # macOS defaults to zsh since Catalina
+                else
+                    echo "bash" # Most Linux distros default to bash
+                fi
+                ;;
+        esac
     fi
 }
 
-# Update the shell RC file function to support fish
-function shell_update_rc {
-    local new_version="$1"
-    local shell_type=$(shell_detect_shell)
+# Function to determine the most appropriate RC file for the shell
+function shell_get_rc_file {
+    local shell_type="$1"
     local rc_file=""
     
-    # Determine shell config file
     case "$shell_type" in
         "zsh")
-            rc_file="$HOME/.zshrc"
+            # For zsh, prefer .zshrc
+            if [ -f "$HOME/.zshrc" ]; then
+                rc_file="$HOME/.zshrc"
+            elif [ -f "$HOME/.zprofile" ]; then
+                rc_file="$HOME/.zprofile"
+            else
+                rc_file="$HOME/.zshrc"
+                touch "$rc_file" # Create if it doesn't exist
+            fi
             ;;
         "bash")
-            rc_file="$HOME/.bashrc"
-            # If bashrc doesn't exist, check for bash_profile
-            if [ ! -f "$rc_file" ]; then
+            # For bash, try multiple files in order of preference
+            if [ -f "$HOME/.bashrc" ]; then
+                rc_file="$HOME/.bashrc"
+            elif [ -f "$HOME/.bash_profile" ]; then
                 rc_file="$HOME/.bash_profile"
-            fi
-            # If neither exists, check for profile
-            if [ ! -f "$rc_file" ]; then
+            elif [ -f "$HOME/.profile" ]; then
                 rc_file="$HOME/.profile"
+            else
+                # Use .bashrc as default
+                rc_file="$HOME/.bashrc"
+                touch "$rc_file" # Create if it doesn't exist
             fi
             ;;
         "fish")
-            rc_file="$HOME/.config/fish/config.fish"
+            # For fish, use config.fish
+            fish_config_dir="$HOME/.config/fish"
+            rc_file="$fish_config_dir/config.fish"
             # Ensure the directory exists
-            mkdir -p "$(dirname "$rc_file")"
+            mkdir -p "$fish_config_dir"
+            if [ ! -f "$rc_file" ]; then
+                touch "$rc_file" # Create if it doesn't exist
+            fi
             ;;
         *)
-            rc_file="$HOME/.profile"
+            # For unknown shells, default to .profile
+            if [ -f "$HOME/.profile" ]; then
+                rc_file="$HOME/.profile"
+            else
+                rc_file="$HOME/.profile"
+                touch "$rc_file" # Create if it doesn't exist
+            fi
             ;;
     esac
+    
+    echo "$rc_file"
+}
+
+# Enhanced function to update shell configuration with better PATH manipulation
+function shell_update_rc {
+    local new_version="$1"
+    local shell_type=$(shell_detect_shell)
+    local rc_file=$(shell_get_rc_file "$shell_type")
+    
+    core_debug_log "Detected shell: $shell_type, RC file: $rc_file"
     
     local php_bin_path=""
     local php_sbin_path=""
@@ -994,125 +1222,160 @@ function shell_update_rc {
         php_sbin_path="$HOMEBREW_PREFIX/opt/$new_version/sbin"
     fi
     
-    # Function to update a single shell config file
-    function update_single_rc_file {
-        local file="$1"
+    # Check if file exists (should have been created in shell_get_rc_file if needed)
+    if [ ! -f "$rc_file" ]; then
+        utils_show_status "error" "RC file $rc_file does not exist and could not be created"
+        return 1
+    fi
+    
+    # Check if we have write permissions
+    if [ ! -w "$rc_file" ]; then
+        utils_show_status "error" "No write permission for $rc_file"
+        exit 1
+    fi
+    
+    # Create backup (only if enabled)
+    if [ "$BACKUP_CONFIG_FILES" = "true" ]; then
+        local backup_file="${rc_file}.bak.$(date +%Y%m%d%H%M%S)"
         
-        # Check if file exists
-        if [ ! -f "$file" ]; then
-            utils_show_status "info" "$file does not exist. Creating it..."
-            touch "$file"
+        # Validate backup file path
+        if ! utils_validate_path "$backup_file"; then
+            utils_show_status "error" "Invalid backup file path, skipping backup"
+        else
+            # Create backup with secure permissions
+            if cp "$rc_file" "$backup_file"; then
+                # Set secure permissions (readable/writable by owner only)
+                chmod 600 "$backup_file" 2>/dev/null || {
+                    utils_show_status "warning" "Could not set secure permissions on backup file"
+                }
+                utils_show_status "info" "Created secure backup at ${backup_file}"
+                
+                # Clean up old backups
+                shell_cleanup_backups "$rc_file"
+            else
+                utils_show_status "error" "Failed to create backup file"
+            fi
         fi
-        
-        # Check if we have write permissions
-        if [ ! -w "$file" ]; then
-            utils_show_status "error" "No write permission for $file"
-            exit 1
-        fi
-        
-        # Create backup (only if enabled)
-        if [ "$BACKUP_CONFIG_FILES" = "true" ]; then
-            local backup_file="${file}.bak.$(date +%Y%m%d%H%M%S)"
-            cp "$file" "$backup_file"
-            utils_show_status "info" "Created backup at ${backup_file}"
-            
-            # Clean up old backups
-            shell_cleanup_backups "$file"
-        fi
-        
-        utils_show_status "info" "Updating PATH in $file for $shell_type shell..."
+    fi
+    
+    utils_show_status "info" "Updating PATH in $rc_file for $shell_type shell..."
+    
+    # Define marker comments to help find our section later
+    local begin_marker="# BEGIN PHPSWITCH MANAGED BLOCK - DO NOT EDIT MANUALLY"
+    local end_marker="# END PHPSWITCH MANAGED BLOCK"
+    
+    # Create secure temporary file
+    local temp_file
+    temp_file=$(utils_create_secure_temp_file)
+    
+    # Function to append the appropriate path setting code for each shell
+    function append_path_code {
+        local target_file="$1"
         
         if [ "$shell_type" = "fish" ]; then
             # Fish shell uses a different syntax for PATH manipulation
-            
-            # Remove old PHP paths from fish_user_paths
-            sed -i.tmp '/set -g fish_user_paths.*opt\/homebrew\/opt\/php/d' "$file"
-            sed -i.tmp '/set -g fish_user_paths.*usr\/local\/opt\/php/d' "$file"
-            rm -f "$file.tmp"
-            
-            # Add the new PHP paths to the beginning of the file
-            temp_file=$(mktemp)
-            
-            cat > "$temp_file" << EOL
-# PHP version paths - Added by phpswitch
+            cat >> "$target_file" << EOL
+$begin_marker
+# Path configuration for PHP version: $new_version
+# Last updated: $(date)
+
+# Remove old PHP paths (if any)
+set --erase PATH
 fish_add_path $php_bin_path
 fish_add_path $php_sbin_path
+fish_add_path /usr/local/bin
+fish_add_path /usr/bin
+fish_add_path /bin
+fish_add_path /usr/sbin
+fish_add_path /sbin
+
+# Refresh the command hash
+if type -q rehash
+    rehash
+end
+$end_marker
 
 EOL
-            
-            # Concatenate the original file to the temp file
-            cat "$file" >> "$temp_file"
-            
-            # Move the temp file back to the original
-            mv "$temp_file" "$file"
-            
         else
-            # Bash/Zsh path handling (existing code)
-            
-            # Remove old PHP paths from PATH variable
-            sed -i.tmp 's|^export PATH=".*opt/homebrew/opt/php@[0-9]\.[0-9]/bin:\$PATH"|#&|' "$file"
-            sed -i.tmp 's|^export PATH=".*opt/homebrew/opt/php@[0-9]\.[0-9]/sbin:\$PATH"|#&|' "$file"
-            sed -i.tmp 's|^export PATH=".*opt/homebrew/opt/php/bin:\$PATH"|#&|' "$file"
-            sed -i.tmp 's|^export PATH=".*opt/homebrew/opt/php/sbin:\$PATH"|#&|' "$file"
-            sed -i.tmp 's|^export PATH=".*usr/local/opt/php@[0-9]\.[0-9]/bin:\$PATH"|#&|' "$file"
-            sed -i.tmp 's|^export PATH=".*usr/local/opt/php@[0-9]\.[0-9]/sbin:\$PATH"|#&|' "$file"
-            sed -i.tmp 's|^export PATH=".*usr/local/opt/php/bin:\$PATH"|#&|' "$file"
-            sed -i.tmp 's|^export PATH=".*usr/local/opt/php/sbin:\$PATH"|#&|' "$file"
-            rm -f "$file.tmp"
-            
-            # Remove our added "force path reload" section if it exists
-            sed -i.tmp '/# Added by phpswitch script - force path reload/,+5d' "$file"
-            rm -f "$file.tmp"
-            
-            # Clean up any empty lines at the end
-            perl -i -pe 'END{if(/^\n+$/){$_=""}}' "$file" 2>/dev/null || true
-            
-            # Add the new PHP PATH entries at the top of the file
-            temp_file=$(mktemp)
-            
-            cat > "$temp_file" << EOL
-# PHP version paths - Added by phpswitch
+            # Bash/Zsh compatible code
+            cat >> "$target_file" << EOL
+$begin_marker
+# Path configuration for PHP version: $new_version
+# Last updated: $(date)
+
+# Prepend PHP paths to PATH to ensure they take precedence
 export PATH="$php_bin_path:$php_sbin_path:\$PATH"
 
+# Force shell to forget previous command locations
+hash -r 2>/dev/null || rehash 2>/dev/null || true
+
+# Add this function to refresh your terminal after sourcing:
+phpswitch_refresh() {
+    # Rehash to find new binaries
+    hash -r 2>/dev/null || rehash 2>/dev/null || true
+    
+    # Report the active PHP version
+    echo "PHP now: \$(php -v | head -n 1)"
+}
+$end_marker
+
 EOL
-            
-            # Concatenate the original file to the temp file
-            cat "$file" >> "$temp_file"
-            
-            # Move the temp file back to the original
-            mv "$temp_file" "$file"
         fi
-        
-        utils_show_status "success" "Updated PATH in $file for $new_version"
     }
     
-    # Update only the appropriate RC file for the current shell
-    update_single_rc_file "$rc_file"
-    
-    # Check for any other potential conflicting PATH settings
-    for file in "$HOME/.path" "$HOME/.config/fish/config.fish"; do
-        if [ -f "$file" ] && [ "$file" != "$rc_file" ]; then
-            if grep -q "PATH.*php" "$file"; then
-                utils_show_status "warning" "Found PHP PATH settings in $file that might conflict"
-                echo -n "Would you like to update this file too? (y/n): "
-                
-                if [ "$(utils_validate_yes_no "Update this file?" "y")" = "y" ]; then
-                    update_single_rc_file "$file"
-                else
-                    utils_show_status "warning" "Skipping $file - this might cause version conflicts"
-                fi
-            fi
-        fi
-    done
-    
-    # Also update force_reload_php function to handle fish shell
-    if [ "$shell_type" = "fish" ]; then
-        utils_show_status "info" "For immediate effect in fish shell, run:"
-        echo "set -gx PATH $php_bin_path $php_sbin_path \$PATH; and rehash"
+    # Check if our markers already exist in the file
+    if grep -q "$begin_marker" "$rc_file"; then
+        # Replace existing block
+        awk -v begin="$begin_marker" -v end="$end_marker" '
+            !found && !between {print}
+            $0 ~ begin {found=1; between=1}
+            $0 ~ end {between=0}
+            END {if (found) print ""}
+        ' "$rc_file" > "$temp_file"
+        
+        # Append the new block
+        append_path_code "$temp_file"
+        
+        # Add the rest of the file
+        awk -v begin="$begin_marker" -v end="$end_marker" '
+            between {next}
+            $0 ~ begin {between=1; next}
+            $0 ~ end {between=0; next}
+            !found && !between {next}
+            {print}
+        ' "$rc_file" >> "$temp_file"
+    else
+        # No existing block - add to beginning of file
+        append_path_code "$temp_file"
+        
+        # Add the original content
+        cat "$rc_file" >> "$temp_file"
     fi
+    
+    # Move the temp file back to the original
+    mv "$temp_file" "$rc_file"
+    
+    # Make sure file is executable for login shells
+    chmod +x "$rc_file" 2>/dev/null || true
+    
+    utils_show_status "success" "Updated PATH in $rc_file for $new_version"
+    
+    # Create instructions file for sourcing
+    local instructions_file="/tmp/phpswitch_instructions_$(date +%s).sh"
+    
+    if [ "$shell_type" = "fish" ]; then
+        echo "source \"$rc_file\"" > "$instructions_file"
+    else
+        echo "source \"$rc_file\"" > "$instructions_file"
+    fi
+    
+    chmod +x "$instructions_file"
+    
+    # Return the path to the instructions file so it can be used by the caller
+    echo "$instructions_file"
 }
 
-# Enhanced force_reload_php function with fish support
+# Completely redesigned shell_force_reload function for immediate effect
 function shell_force_reload {
     local version="$1"
     local php_bin_path=""
@@ -1127,45 +1390,89 @@ function shell_force_reload {
         php_sbin_path="$HOMEBREW_PREFIX/opt/$version/sbin"
     fi
     
+    # Check that the directories exist
+    if [ ! -d "$php_bin_path" ] || [ ! -d "$php_sbin_path" ]; then
+        utils_show_status "error" "PHP binary directories not found at $php_bin_path or $php_sbin_path"
+        return 1
+    fi
+    
+    # Log the current PATH for debugging
     core_debug_log "Before PATH update: $PATH"
     
+    # Direct PATH manipulation for the current shell
+    # First, remove any existing PHP paths from PATH
+    local new_path=""
+    local found_php=false
+    
     if [ "$shell_type" = "fish" ]; then
-        # For fish shell, we need different commands
-        # But we can't directly manipulate fish's PATH from bash/zsh
-        # So we'll just inform the user how to do it
+        # For fish shell, we need to tell user to do this manually
         echo "To update PATH in current fish shell session, run:"
-        echo "set -gx PATH $php_bin_path $php_sbin_path \$PATH; and rehash"
+        echo "set --erase PATH"
+        echo "fish_add_path $php_bin_path"
+        echo "fish_add_path $php_sbin_path"
+        echo "fish_add_path /usr/local/bin /usr/bin /bin /usr/sbin /sbin"
+        echo "rehash"
         return 0
     else
-        # First, remove any existing PHP paths from the PATH
-        local new_path=""
+        # For bash/zsh, we can directly modify the current shell's PATH
+        
+        # Build a new PATH with PHP paths at the beginning
+        local system_paths=""
+        local php_paths="$php_bin_path:$php_sbin_path"
+        
+        # Validate PHP paths before using them
+        if ! utils_validate_path "$php_bin_path"; then
+            utils_show_status "error" "Invalid PHP bin path: $php_bin_path"
+            return 1
+        fi
+        if ! utils_validate_path "$php_sbin_path"; then
+            utils_show_status "error" "Invalid PHP sbin path: $php_sbin_path"
+            return 1
+        fi
+        
         IFS=:
         for path_component in $PATH; do
-            if ! echo "$path_component" | grep -q "php"; then
-                if [ -z "$new_path" ]; then
-                    new_path="$path_component"
+            # Validate each path component before processing
+            if [[ -n "$path_component" ]]; then
+                if ! utils_validate_path "$path_component" "true"; then
+                    core_debug_log "Skipping invalid PATH component: $path_component"
+                    continue
+                fi
+                
+                # Skip any PHP-related paths
+                if echo "$path_component" | grep -q -i "php"; then
+                    found_php=true
+                    continue
+                fi
+                
+                # Add non-PHP paths
+                if [ -z "$system_paths" ]; then
+                    system_paths="$path_component"
                 else
-                    new_path="$new_path:$path_component"
+                    system_paths="$system_paths:$path_component"
                 fi
             fi
         done
         unset IFS
         
-        # Now add the new PHP bin and sbin directories to the start of the PATH
-        if [ -d "$php_bin_path" ] && [ -d "$php_sbin_path" ]; then
-            export PATH="$php_bin_path:$php_sbin_path:$new_path"
-            core_debug_log "After PATH update: $PATH"
-            
-            # Force the shell to forget previous command locations
-            hash -r 2>/dev/null || rehash 2>/dev/null || true
-            
-            # Verify the PHP binary now in use
-            core_debug_log "PHP now resolves to: $(which php)"
-            core_debug_log "PHP version now: $(php -v | head -n 1)"
-            
+        # Set the new PATH with PHP paths first
+        export PATH="$php_bin_path:$php_sbin_path:$system_paths"
+        
+        # Force the shell to forget previous command locations
+        hash -r 2>/dev/null || rehash 2>/dev/null || true
+        
+        # Log the updated PATH for debugging
+        core_debug_log "After PATH update: $PATH"
+        
+        # Verify PHP version
+        local current_php=$(which php)
+        core_debug_log "PHP now resolves to: $current_php"
+        
+        if [[ "$current_php" == *"$version"* ]] || [[ "$current_php" == *"php/bin/php" && "$version" == "php@default" ]]; then
+            core_debug_log "PATH update successful"
             return 0
         else
-            utils_show_status "error" "PHP binary directories not found at $php_bin_path or $php_sbin_path"
+            core_debug_log "PATH update failed. PHP still resolves to: $current_php"
             return 1
         fi
     fi
@@ -1181,6 +1488,95 @@ function shell_cleanup_backups {
         core_debug_log "Removing old backup: $old_backup"
         rm -f "$old_backup"
     done
+}
+
+# Function to create a direct executable script that can be sourced to reload PHP
+function shell_create_reload_script {
+    local version="$1"
+    local shell_type=$(shell_detect_shell)
+    local php_bin_path=""
+    local php_sbin_path=""
+    
+    if [ "$version" = "php@default" ]; then
+        php_bin_path="$HOMEBREW_PREFIX/opt/php/bin"
+        php_sbin_path="$HOMEBREW_PREFIX/opt/php/sbin"
+    else
+        php_bin_path="$HOMEBREW_PREFIX/opt/$version/bin"
+        php_sbin_path="$HOMEBREW_PREFIX/opt/$version/sbin"
+    fi
+    
+    # Create a temporary script that can be sourced to reload the PATH
+    local reload_script="/tmp/phpswitch_reload_$(date +%s).sh"
+    
+    if [ "$shell_type" = "fish" ]; then
+        cat > "$reload_script" << EOL
+#!/usr/bin/env fish
+# PHPSwitch temporary reload script for fish shell
+# Generated: $(date)
+
+echo "Reloading PATH with PHP $version..."
+
+# Clear the PATH to remove any existing PHP paths
+set --erase PATH
+
+# Add new PHP paths first to ensure they take precedence
+fish_add_path $php_bin_path
+fish_add_path $php_sbin_path
+
+# Add system paths back
+fish_add_path /usr/local/bin
+fish_add_path /usr/bin
+fish_add_path /bin
+fish_add_path /usr/sbin
+fish_add_path /sbin
+
+# Refresh command hash
+if type -q rehash
+    rehash
+end
+
+# Verify PHP version
+echo "Active PHP version is now: "(php -v | head -n 1)
+EOL
+    else
+        # For bash/zsh
+        cat > "$reload_script" << EOL
+#!/bin/bash
+# PHPSwitch temporary reload script for bash/zsh shell
+# Generated: $(date)
+
+echo "Reloading PATH with PHP $version..."
+
+# Build new PATH with PHP directories at the beginning
+NEW_PATH="$php_bin_path:$php_sbin_path"
+
+# Add back non-PHP paths
+OLD_IFS=\$IFS
+IFS=:
+for path_component in \$PATH; do
+    # Skip PHP-related paths
+    if echo "\$path_component" | grep -q -i "php"; then
+        continue
+    fi
+    
+    # Add non-PHP path
+    NEW_PATH="\$NEW_PATH:\$path_component"
+done
+IFS=\$OLD_IFS
+
+# Set the new PATH
+export PATH="\$NEW_PATH"
+
+# Force shell to forget previous command locations
+hash -r 2>/dev/null || rehash 2>/dev/null || true
+
+# Verify PHP version
+echo "Active PHP version is now: \$(php -v | head -n 1)"
+EOL
+    fi
+    
+    chmod +x "$reload_script"
+    echo "$reload_script"
 }
 # Module: version.sh
 # PHPSwitch Version Management
@@ -1222,7 +1618,26 @@ function version_check_project {
     done
     
     if [ -n "$php_version_file" ]; then
+        # Validate the version file path
+        if ! utils_validate_path "$php_version_file"; then
+            core_debug_log "Invalid version file path: $php_version_file"
+            return 1
+        fi
+        
+        # Read and validate the project version
         local project_version=$(cat "$php_version_file" | tr -d '[:space:]')
+        
+        # Basic validation: check length and characters
+        if [[ ${#project_version} -gt 32 ]] || [[ -z "$project_version" ]]; then
+            core_debug_log "Invalid version content in $php_version_file"
+            return 1
+        fi
+        
+        # Check for potentially dangerous characters
+        if [[ "$project_version" =~ [[:cntrl:]] ]] || [[ "$project_version" == *$'\0'* ]]; then
+            core_debug_log "Dangerous characters detected in version file: $php_version_file"
+            return 1
+        fi
         
         # Handle different version formats
         if [[ "$project_version" == php@* ]]; then
@@ -1521,7 +1936,7 @@ function version_uninstall_php {
     fi
 }
 
-# Function to switch PHP version with enhanced PATH handling
+# Improved function to switch PHP version with enhanced PATH handling
 function version_switch_php {
     local new_version="$1"
     local is_installed="$2"
@@ -1634,9 +2049,11 @@ function version_switch_php {
             
             # Try to directly create symlinks
             local php_bin_path="$HOMEBREW_PREFIX/opt/$brew_version/bin"
+            local php_sbin_path="$HOMEBREW_PREFIX/opt/$brew_version/sbin"
             
             if [ ! -d "$php_bin_path" ] && [ "$new_version" = "php@default" ]; then
                 php_bin_path="$HOMEBREW_PREFIX/opt/php/bin"
+                php_sbin_path="$HOMEBREW_PREFIX/opt/php/sbin"
             fi
             
             if [ -d "$php_bin_path" ]; then
@@ -1654,8 +2071,11 @@ function version_switch_php {
         fi
     fi
     
-    # Update shell RC file
-    shell_update_rc "$new_version"
+    # Create and update shell configuration
+    local instructions_file=$(shell_update_rc "$new_version")
+    
+    # Create a reload script for immediate use
+    local reload_script=$(shell_create_reload_script "$new_version")
     
     # Restart PHP-FPM if it's being used
     fpm_restart "$new_version"
@@ -1667,147 +2087,94 @@ function version_switch_php {
         export SOURCED=true
         utils_show_status "info" "Applying changes to current shell..."
         
-        # Directly modify the PATH to ensure the changes take effect immediately
-        if ! shell_force_reload "$new_version"; then
-            # If shell_force_reload failed, give clear instructions
-            shell_type=$(shell_detect_shell)
-            echo ""
-            echo "To apply the changes immediately, copy-paste this command:"
-            
-            case "$shell_type" in
-                "zsh")
-                    echo "export PATH=\"$php_bin_path:$php_sbin_path:\$PATH\"; hash -r"
-                    ;;
-                "bash")
-                    echo "export PATH=\"$php_bin_path:$php_sbin_path:\$PATH\"; hash -r"
-                    ;;
-                "fish")
-                    echo "set -gx PATH $php_bin_path $php_sbin_path \$PATH; and rehash"
-                    ;;
-                *)
-                    echo "export PATH=\"$php_bin_path:$php_sbin_path:\$PATH\""
-                    ;;
-            esac
-            echo ""
-        fi
-        
-        # Verify the active PHP version
-        CURRENT_PHP_VERSION=$(php -v 2>/dev/null | head -n 1 | cut -d " " -f 2 | cut -d "." -f 1,2)
-        
-        if [ "$new_version" = "php@default" ]; then
-            # For default PHP, we need to get the expected version from the actual binary
-            DEFAULT_PHP_PATH="$HOMEBREW_PREFIX/opt/php/bin/php"
-            if [ -f "$DEFAULT_PHP_PATH" ]; then
-                EXPECTED_VERSION=$($DEFAULT_PHP_PATH -v 2>/dev/null | head -n 1 | cut -d " " -f 2 | cut -d "." -f 1,2)
-            else
-                EXPECTED_VERSION="unknown"
-            fi
-        else
-            EXPECTED_VERSION=$(echo "$new_version" | grep -o "[0-9]\.[0-9]")
-        fi
-        
-        if [ "$CURRENT_PHP_VERSION" = "$EXPECTED_VERSION" ]; then
-            utils_show_status "success" "Active PHP version is now: $CURRENT_PHP_VERSION"
+        # Try to directly modify PATH to make changes immediate
+        if shell_force_reload "$new_version"; then
+            utils_show_status "success" "Active PHP version is now: $(php -v | head -n 1 | cut -d " " -f 2)"
             php -v | head -n 1
-            
-            # Create a PATH validation command to check in new sessions
-            echo ""
-            echo "To verify PHP version in new terminal sessions, use this command:"
-            echo "which php && php -v | head -n 1"
-            
-            # Show actual binary location
-            echo ""
-            echo "PHP binary location: $(which php)"
-            if [ -L "$(which php)" ]; then
-                echo "Symlinked to: $(readlink $(which php))"
-            fi
         else
-            utils_show_status "warning" "PHP version switch was not fully applied to the current shell"
-            echo "Expected PHP version: $EXPECTED_VERSION"
-            echo "Current PHP version: $(php -v | head -n 1)"
-            echo ""
-            
+            # If direct PATH modification failed, provide clear instructions
             shell_type=$(shell_detect_shell)
-            
-            echo "To activate the new PHP version in your current shell, run:"
-            case "$shell_type" in
-                "zsh")
-                    echo "source ~/.zshrc"
-                    ;;
-                "bash")
-                    if [ -f ~/.bashrc ]; then
-                        echo "source ~/.bashrc"
-                    elif [ -f ~/.bash_profile ]; then
-                        echo "source ~/.bash_profile"
-                    else
-                        echo "source ~/.profile"
-                    fi
-                    ;;
-                "fish")
-                    echo "source ~/.config/fish/config.fish"
-                    ;;
-                *)
-                    echo "source ~/.profile"
-                    ;;
-            esac
-            
+            utils_show_status "warning" "Could not update PATH in current shell"
             echo ""
-            echo "Or, you can directly update your PATH for this session:"
+            echo "✨ To activate PHP $new_version in your current terminal, run this command:"
+            
             case "$shell_type" in
                 "zsh"|"bash")
-                    echo "export PATH=\"$php_bin_path:$php_sbin_path:\$PATH\"; hash -r"
+                    echo "source \"$reload_script\""
                     ;;
                 "fish")
-                    echo "set -gx PATH $php_bin_path $php_sbin_path \$PATH; and rehash"
+                    echo "source \"$reload_script\""
                     ;;
                 *)
-                    echo "export PATH=\"$php_bin_path:$php_sbin_path:\$PATH\""
+                    echo "source \"$reload_script\""
                     ;;
             esac
-            
-            echo ""
-            echo "Or restart your terminal session to use the new PHP version."
         fi
+        
+        # Show actual binary location
+        echo ""
+        echo "PHP binary location: $(which php)"
+        if [ -L "$(which php)" ]; then
+            echo "Symlinked to: $(readlink $(which php))"
+        fi
+        
+        # Add permanent instructions
+        echo ""
+        echo "⚠️ For permanent effect, EITHER:"
+        echo "  1. Open a new terminal window, OR"
+        echo "  2. Run this command to reload your shell configuration:"
+        
+        case "$shell_type" in
+            "zsh")
+                echo "     source ~/.zshrc"
+                ;;
+            "bash")
+                if [ -f ~/.bashrc ]; then
+                    echo "     source ~/.bashrc"
+                elif [ -f ~/.bash_profile ]; then
+                    echo "     source ~/.bash_profile"
+                else
+                    echo "     source ~/.profile"
+                fi
+                ;;
+            "fish")
+                echo "     source ~/.config/fish/config.fish"
+                ;;
+            *)
+                echo "     source ~/.profile"
+                ;;
+        esac
     else
         shell_type=$(shell_detect_shell)
         
         echo "To apply the changes to your current terminal, run:"
+        echo "source \"$reload_script\""
+        
+        echo ""
+        echo "For permanent effect, EITHER:"
+        echo "  1. Open a new terminal window, OR"
+        echo "  2. Run this command to reload your shell configuration:"
+        
         case "$shell_type" in
             "zsh")
-                echo "source ~/.zshrc"
+                echo "     source ~/.zshrc"
                 ;;
             "bash")
                 if [ -f ~/.bashrc ]; then
-                    echo "source ~/.bashrc"
+                    echo "     source ~/.bashrc"
                 elif [ -f ~/.bash_profile ]; then
-                    echo "source ~/.bash_profile"
+                    echo "     source ~/.bash_profile"
                 else
-                    echo "source ~/.profile"
+                    echo "     source ~/.profile"
                 fi
                 ;;
             "fish")
-                echo "source ~/.config/fish/config.fish"
+                echo "     source ~/.config/fish/config.fish"
                 ;;
             *)
-                echo "source ~/.profile"
+                echo "     source ~/.profile"
                 ;;
         esac
-        
-        echo ""
-        echo "Or, you can directly update your PATH for this session:"
-        case "$shell_type" in
-            "zsh"|"bash")
-                echo "export PATH=\"$php_bin_path:$php_sbin_path:\$PATH\"; hash -r"
-                ;;
-            "fish")
-                echo "set -gx PATH $php_bin_path $php_sbin_path \$PATH; and rehash"
-                ;;
-            *)
-                echo "export PATH=\"$php_bin_path:$php_sbin_path:\$PATH\""
-                ;;
-        esac
-        
-        echo "Then verify with: php -v"
     fi
 }
 
@@ -1902,12 +2269,26 @@ function fpm_cleanup_service {
     
     if [ -d "$cellar_path" ]; then
         utils_show_status "info" "Resetting permissions for: $cellar_path"
-        sudo chown -R $(whoami) "$cellar_path" 2>/dev/null
+        # Get secure username and validate it
+        local username
+        username="$(id -un)"
+        if utils_validate_username "$username"; then
+            sudo chown -R "$username" "$cellar_path" 2>/dev/null
+        else
+            utils_show_status "error" "Invalid username detected, skipping permission reset"
+        fi
     fi
     
     if [ -d "$opt_path" ]; then
         utils_show_status "info" "Resetting permissions for: $opt_path"
-        sudo chown -R $(whoami) "$opt_path" 2>/dev/null
+        # Get secure username and validate it
+        local username
+        username="$(id -un)"
+        if utils_validate_username "$username"; then
+            sudo chown -R "$username" "$opt_path" 2>/dev/null
+        else
+            utils_show_status "error" "Invalid username detected, skipping permission reset"
+        fi
     fi
     
     # Run brew services cleanup to clear stale services
@@ -2300,8 +2681,15 @@ function auto_install_zsh {
     # Create backup before modifying
     if [ -f "$rc_file" ]; then
         local backup_file="${rc_file}.bak.$(date +%Y%m%d%H%M%S)"
-        cp "$rc_file" "$backup_file" 2>/dev/null
-        utils_show_status "info" "Created backup at ${backup_file}"
+        
+        # Validate backup file path
+        if utils_validate_path "$backup_file"; then
+            if cp "$rc_file" "$backup_file" 2>/dev/null; then
+                # Set secure permissions (readable/writable by owner only)
+                chmod 600 "$backup_file" 2>/dev/null
+                utils_show_status "info" "Created secure backup at ${backup_file}"
+            fi
+        fi
     fi
     
     # Add the hook function to the rc file
@@ -2403,8 +2791,15 @@ function auto_install_bash {
     # Create backup before modifying
     if [ -f "$rc_file" ]; then
         local backup_file="${rc_file}.bak.$(date +%Y%m%d%H%M%S)"
-        cp "$rc_file" "$backup_file" 2>/dev/null
-        utils_show_status "info" "Created backup at ${backup_file}"
+        
+        # Validate backup file path
+        if utils_validate_path "$backup_file"; then
+            if cp "$rc_file" "$backup_file" 2>/dev/null; then
+                # Set secure permissions (readable/writable by owner only)
+                chmod 600 "$backup_file" 2>/dev/null
+                utils_show_status "info" "Created secure backup at ${backup_file}"
+            fi
+        fi
     fi
     
     # Add the hook function to the rc file
@@ -2501,8 +2896,15 @@ function auto_install_fish {
     # Create backup before modifying
     if [ -f "$rc_file" ]; then
         local backup_file="${rc_file}.bak.$(date +%Y%m%d%H%M%S)"
-        cp "$rc_file" "$backup_file" 2>/dev/null
-        utils_show_status "info" "Created backup at ${backup_file}"
+        
+        # Validate backup file path
+        if utils_validate_path "$backup_file"; then
+            if cp "$rc_file" "$backup_file" 2>/dev/null; then
+                # Set secure permissions (readable/writable by owner only)
+                chmod 600 "$backup_file" 2>/dev/null
+                utils_show_status "info" "Created secure backup at ${backup_file}"
+            fi
+        fi
     fi
     
     # Add the hook function to the rc file
@@ -2657,22 +3059,42 @@ function cmd_parse_arguments {
     # Parse command-line arguments for non-interactive mode
     if [[ "$1" == --switch=* ]]; then
         version="${1#*=}"
+        if ! utils_validate_version "$version"; then
+            utils_show_status "error" "Invalid version format: $version"
+            exit 1
+        fi
         cmd_non_interactive_switch "$version" "false"
         exit $?
     elif [[ "$1" == --switch-force=* ]]; then
         version="${1#*=}"
+        if ! utils_validate_version "$version"; then
+            utils_show_status "error" "Invalid version format: $version"
+            exit 1
+        fi
         cmd_non_interactive_switch "$version" "true"
         exit $?
     elif [[ "$1" == --install=* ]]; then
         version="${1#*=}"
+        if ! utils_validate_version "$version"; then
+            utils_show_status "error" "Invalid version format: $version"
+            exit 1
+        fi
         cmd_non_interactive_install "$version"
         exit $?
     elif [[ "$1" == --uninstall=* ]]; then
         version="${1#*=}"
+        if ! utils_validate_version "$version"; then
+            utils_show_status "error" "Invalid version format: $version"
+            exit 1
+        fi
         cmd_non_interactive_uninstall "$version" "false"
         exit $?
     elif [[ "$1" == --uninstall-force=* ]]; then
         version="${1#*=}"
+        if ! utils_validate_version "$version"; then
+            utils_show_status "error" "Invalid version format: $version"
+            exit 1
+        fi
         cmd_non_interactive_uninstall "$version" "true"
         exit $?
     elif [ "$1" = "--list" ]; then
@@ -2696,6 +3118,11 @@ function cmd_parse_arguments {
     elif [ "$1" = "--refresh-cache" ]; then
         utils_show_status "info" "Refreshing PHP versions cache..."
         local cache_dir="$HOME/.cache/phpswitch"
+        # Validate cache directory path
+        if ! utils_validate_path "$cache_dir"; then
+            utils_show_status "error" "Invalid cache directory path"
+            exit 1
+        fi
         mkdir -p "$cache_dir"
         rm -f "$cache_dir/available_versions.cache"
         core_get_available_php_versions > /dev/null
@@ -3046,7 +3473,13 @@ function cmd_fix_permissions {
 CACHE_DIR="$HOME/.cache/phpswitch"
 ALT_CACHE_DIR="$HOME/.phpswitch_cache"
 CONFIG_FILE="$HOME/.phpswitch.conf"
-USERNAME=$(whoami)
+# Get secure username with validation
+USERNAME=$(id -un)
+# Validate username to prevent command injection
+if [[ ! "$USERNAME" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+    echo "Error: Invalid username detected. Exiting for security."
+    return 1
+fi
 
 echo "PHPSwitch Permission Fix Tool"
 echo "============================"
@@ -3125,7 +3558,15 @@ else
     echo "❌ Failed to create alternative directory!"
     
     # Last resort: use temporary directory
-    TMP_DIR="/tmp/phpswitch_cache_$(whoami)"
+    # Create secure temporary directory name
+    local secure_username
+    secure_username="$(id -un)"
+    if [[ "$secure_username" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+        TMP_DIR="/tmp/phpswitch_cache_$secure_username"
+    else
+        echo "Error: Invalid username for temporary directory"
+        exit 1
+    fi
     echo "Using temporary directory as last resort: $TMP_DIR"
     mkdir -p "$TMP_DIR" 2>/dev/null
     

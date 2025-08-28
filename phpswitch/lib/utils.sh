@@ -10,6 +10,159 @@ if [ -t 1 ]; then
     fi
 fi
 
+# Security: Path validation functions
+function utils_validate_path {
+    local path="$1"
+    local allow_relative="${2:-false}"
+    
+    # Check for empty path
+    if [[ -z "$path" ]]; then
+        return 1
+    fi
+    
+    # Check for path traversal attempts
+    if [[ "$path" == *".."* ]]; then
+        core_debug_log "Path validation failed: path traversal detected in '$path'"
+        return 1
+    fi
+    
+    # Check for null bytes
+    if [[ "$path" == *$'\0'* ]]; then
+        core_debug_log "Path validation failed: null byte detected in '$path'"
+        return 1
+    fi
+    
+    # If relative paths are not allowed, ensure it's absolute
+    if [[ "$allow_relative" != "true" ]] && [[ "$path" != /* ]]; then
+        core_debug_log "Path validation failed: relative path not allowed '$path'"
+        return 1
+    fi
+    
+    # Check path length (prevent extremely long paths)
+    if [[ ${#path} -gt 4096 ]]; then
+        core_debug_log "Path validation failed: path too long '$path'"
+        return 1
+    fi
+    
+    # Check for potentially dangerous characters
+    if [[ "$path" =~ [[:cntrl:]] ]]; then
+        core_debug_log "Path validation failed: control characters detected in '$path'"
+        return 1
+    fi
+    
+    return 0
+}
+
+# Security: Validate PHP version string
+function utils_validate_version {
+    local version="$1"
+    
+    # Check for empty version
+    if [[ -z "$version" ]]; then
+        return 1
+    fi
+    
+    # Allow standard PHP version patterns: php@8.1, 8.1, php, etc.
+    if [[ "$version" =~ ^(php(@[0-9]+\.[0-9]+)?|[0-9]+\.[0-9]+|default)$ ]]; then
+        return 0
+    fi
+    
+    core_debug_log "Version validation failed: invalid version format '$version'"
+    return 1
+}
+
+# Security: Validate username string
+function utils_validate_username {
+    local username="$1"
+    
+    # Check for empty username
+    if [[ -z "$username" ]]; then
+        return 1
+    fi
+    
+    # Allow only alphanumeric characters, dots, underscores, and hyphens
+    if [[ "$username" =~ ^[a-zA-Z0-9._-]+$ ]] && [[ ${#username} -le 32 ]]; then
+        return 0
+    fi
+    
+    core_debug_log "Username validation failed: invalid username '$username'"
+    return 1
+}
+
+# Security: Array to track temporary files for cleanup
+declare -a TEMP_FILES_TO_CLEANUP=()
+declare -a TEMP_DIRS_TO_CLEANUP=()
+
+# Security: Create secure temporary file with automatic cleanup
+function utils_create_secure_temp_file {
+    local temp_file
+    temp_file=$(mktemp)
+    
+    if [[ -n "$temp_file" ]] && [[ -f "$temp_file" ]]; then
+        # Set secure permissions (readable/writable by owner only)
+        chmod 600 "$temp_file"
+        
+        # Track for cleanup
+        TEMP_FILES_TO_CLEANUP+=("$temp_file")
+        
+        echo "$temp_file"
+        return 0
+    else
+        core_debug_log "Failed to create secure temporary file"
+        return 1
+    fi
+}
+
+# Security: Create secure temporary directory with automatic cleanup
+function utils_create_secure_temp_dir {
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    
+    if [[ -n "$temp_dir" ]] && [[ -d "$temp_dir" ]]; then
+        # Set secure permissions (accessible by owner only)
+        chmod 700 "$temp_dir"
+        
+        # Track for cleanup
+        TEMP_DIRS_TO_CLEANUP+=("$temp_dir")
+        
+        echo "$temp_dir"
+        return 0
+    else
+        core_debug_log "Failed to create secure temporary directory"
+        return 1
+    fi
+}
+
+# Security: Cleanup all tracked temporary files and directories
+function utils_cleanup_temp_files {
+    local item
+    
+    # Clean up temporary files
+    for item in "${TEMP_FILES_TO_CLEANUP[@]}"; do
+        if [[ -f "$item" ]]; then
+            rm -f "$item" 2>/dev/null
+            core_debug_log "Cleaned up temporary file: $item"
+        fi
+    done
+    
+    # Clean up temporary directories
+    for item in "${TEMP_DIRS_TO_CLEANUP[@]}"; do
+        if [[ -d "$item" ]]; then
+            rm -rf "$item" 2>/dev/null
+            core_debug_log "Cleaned up temporary directory: $item"
+        fi
+    done
+    
+    # Clear the arrays
+    TEMP_FILES_TO_CLEANUP=()
+    TEMP_DIRS_TO_CLEANUP=()
+}
+
+# Security: Setup trap for automatic cleanup
+function utils_setup_temp_cleanup_trap {
+    trap 'utils_cleanup_temp_files; exit' INT TERM EXIT
+}
+
 # Function to display a spinning animation for long-running processes
 function utils_show_spinner {
     local message="$1"
@@ -446,7 +599,14 @@ EOL
                     
                     if [ ! -w "$cache_dir" ]; then
                         # Try ownership change
-                        sudo chown "$(whoami)" "$cache_dir" 2>/dev/null
+                        # Get secure username and validate it
+                        local username
+                        username="$(id -un)"
+                        if utils_validate_username "$username"; then
+                            sudo chown "$username" "$cache_dir" 2>/dev/null
+                        else
+                            utils_show_status "error" "Invalid username detected, skipping ownership change"
+                        fi
                         
                         if [ ! -w "$cache_dir" ]; then
                             utils_show_status "error" "Could not fix permissions with standard methods"

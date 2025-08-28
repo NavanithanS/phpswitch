@@ -24,22 +24,42 @@ function cmd_parse_arguments {
     # Parse command-line arguments for non-interactive mode
     if [[ "$1" == --switch=* ]]; then
         version="${1#*=}"
+        if ! utils_validate_version "$version"; then
+            utils_show_status "error" "Invalid version format: $version"
+            exit 1
+        fi
         cmd_non_interactive_switch "$version" "false"
         exit $?
     elif [[ "$1" == --switch-force=* ]]; then
         version="${1#*=}"
+        if ! utils_validate_version "$version"; then
+            utils_show_status "error" "Invalid version format: $version"
+            exit 1
+        fi
         cmd_non_interactive_switch "$version" "true"
         exit $?
     elif [[ "$1" == --install=* ]]; then
         version="${1#*=}"
+        if ! utils_validate_version "$version"; then
+            utils_show_status "error" "Invalid version format: $version"
+            exit 1
+        fi
         cmd_non_interactive_install "$version"
         exit $?
     elif [[ "$1" == --uninstall=* ]]; then
         version="${1#*=}"
+        if ! utils_validate_version "$version"; then
+            utils_show_status "error" "Invalid version format: $version"
+            exit 1
+        fi
         cmd_non_interactive_uninstall "$version" "false"
         exit $?
     elif [[ "$1" == --uninstall-force=* ]]; then
         version="${1#*=}"
+        if ! utils_validate_version "$version"; then
+            utils_show_status "error" "Invalid version format: $version"
+            exit 1
+        fi
         cmd_non_interactive_uninstall "$version" "true"
         exit $?
     elif [ "$1" = "--list" ]; then
@@ -63,6 +83,11 @@ function cmd_parse_arguments {
     elif [ "$1" = "--refresh-cache" ]; then
         utils_show_status "info" "Refreshing PHP versions cache..."
         local cache_dir="$HOME/.cache/phpswitch"
+        # Validate cache directory path
+        if ! utils_validate_path "$cache_dir"; then
+            utils_show_status "error" "Invalid cache directory path"
+            exit 1
+        fi
         mkdir -p "$cache_dir"
         rm -f "$cache_dir/available_versions.cache"
         core_get_available_php_versions > /dev/null
@@ -413,7 +438,13 @@ function cmd_fix_permissions {
 CACHE_DIR="$HOME/.cache/phpswitch"
 ALT_CACHE_DIR="$HOME/.phpswitch_cache"
 CONFIG_FILE="$HOME/.phpswitch.conf"
-USERNAME=$(whoami)
+# Get secure username with validation
+USERNAME=$(id -un)
+# Validate username to prevent command injection
+if [[ ! "$USERNAME" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+    echo "Error: Invalid username detected. Exiting for security."
+    return 1
+fi
 
 echo "PHPSwitch Permission Fix Tool"
 echo "============================"
@@ -492,7 +523,15 @@ else
     echo "❌ Failed to create alternative directory!"
     
     # Last resort: use temporary directory
-    TMP_DIR="/tmp/phpswitch_cache_$(whoami)"
+    # Create secure temporary directory name
+    local secure_username
+    secure_username="$(id -un)"
+    if [[ "$secure_username" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+        TMP_DIR="/tmp/phpswitch_cache_$secure_username"
+    else
+        echo "Error: Invalid username for temporary directory"
+        exit 1
+    fi
     echo "Using temporary directory as last resort: $TMP_DIR"
     mkdir -p "$TMP_DIR" 2>/dev/null
     
