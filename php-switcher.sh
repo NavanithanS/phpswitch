@@ -438,9 +438,10 @@ function utils_validate_path {
         return 1
     fi
     
-    # Check for null bytes
-    if [[ "$path" == *$'\0'* ]]; then
-        core_debug_log "Path validation failed: null byte detected in '$path'"
+    # Check for null bytes using a more robust method
+    # Use test with -z and command substitution to detect null bytes
+    if [ -n "$(printf '%s' "$path" | tr -d '[:print:][:space:]')" ]; then
+        core_debug_log "Path validation failed: non-printable characters detected in '$path'"
         return 1
     fi
     
