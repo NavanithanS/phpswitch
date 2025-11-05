@@ -224,7 +224,7 @@ function core_get_available_php_versions {
             
             # Run searches in background
             brew search /php@[0-9]/ 2>/dev/null | grep '^php@' > "$search_file1" & 
-            brew search /^php$/ 2>/dev/null | grep '^php$' | sed 's/php/php@default/g' > "$search_file2" &
+            brew search /^php$/ 2>/dev/null | sed 's/^php$/php@default/' > "$search_file2" &
             brew_pid=$!
             
             # Wait for up to 10 seconds
@@ -280,7 +280,7 @@ function core_get_available_php_versions {
     
     while kill -0 $spinner_pid 2>/dev/null; do
         i=$(( (i+1) % 4 ))
-        printf "\rSearching for available PHP versions... ${spin:$i:1}"
+        printf "\rSearching for available PHP versions... %s" "${spin:$i:1}"
         sleep 0.1
     done
     

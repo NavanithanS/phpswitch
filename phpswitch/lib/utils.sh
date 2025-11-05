@@ -175,11 +175,11 @@ function utils_show_spinner {
     
     while kill -0 $pid 2>/dev/null; do
         i=$(( (i+1) % 4 ))
-        printf "\r$message ${spin:$i:1}"
+        printf "\r%s %s" "$message" "${spin:$i:1}"
         sleep 0.1
     done
     
-    printf "\r$message Done!   \n"
+    printf "\r%s Done!   \n" "$message"
 }
 
 # Alternative function with dots animation for progress indication
@@ -195,11 +195,11 @@ function utils_show_progress {
         if [ ${#dots} -gt 5 ]; then
             dots="."
         fi
-        printf "\r$message%-6s" "$dots"
+        printf "\r%s%-6s" "$message" "$dots"
         sleep 0.3
     done
     
-    printf "\r$message Done!      \n"
+    printf "\r%s Done!      \n" "$message"
 }
 
 # Function to display success or error message with colors
