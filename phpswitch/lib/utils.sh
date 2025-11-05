@@ -175,7 +175,8 @@ function utils_show_spinner {
     
     while kill -0 $pid 2>/dev/null; do
         i=$(( (i+1) % 4 ))
-        printf "\r%s %s" "$message" "${spin:$i:1}"
+        local current_char="${spin:$i:1}"
+        printf "\r%s %s" "$message" "$current_char"
         sleep 0.1
     done
     

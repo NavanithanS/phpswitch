@@ -274,13 +274,15 @@ function core_get_available_php_versions {
     # Show a brief spinner while we wait
     local spinner_pid=$!
     local spin='-\|/'
+    local spin_length=${#spin}
     local i=0
     
     echo -n "Searching for available PHP versions..."
     
     while kill -0 $spinner_pid 2>/dev/null; do
         i=$(( (i+1) % 4 ))
-        printf "\rSearching for available PHP versions... %s" "${spin:$i:1}"
+        local current_char="${spin:$i:1}"
+        printf "\rSearching for available PHP versions... %s" "$current_char"
         sleep 0.1
     done
     
