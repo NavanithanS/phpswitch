@@ -32,13 +32,22 @@ A powerful command-line utility for easily switching between multiple PHP versio
 
 ## Installation
 
-### Option 1: Quick Installation
+### Option 1: Homebrew (Recommended)
+
+The easiest way to install PHPSwitch is via Homebrew:
+
+```bash
+brew tap NavanithanS/phpswitch
+brew install phpswitch
+```
+
+### Option 2: Quick Installation (Curl)
 
 ```bash
 curl -L https://raw.githubusercontent.com/NavanithanS/phpswitch/master/php-switcher.sh -o /tmp/php-switcher.sh && chmod +x /tmp/php-switcher.sh && sudo /tmp/php-switcher.sh --install
 ```
 
-### Option 2: Manual Installation
+### Option 3: Manual Installation
 
 1. Clone this repository:
 
