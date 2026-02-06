@@ -140,3 +140,15 @@ fi
 rm -f "$COMBINED_FILE"
 
 echo "Build complete!"
+# Calculate SHA256 checksum
+if command -v shasum >/dev/null 2>&1; then
+    checksum=$(shasum -a 256 "$RELEASE_FILE" | awk '{print $1}')
+    echo ""
+    echo "SHA256 Checksum for Homebrew Formula:"
+    echo "$checksum"
+elif command -v sha256sum >/dev/null 2>&1; then
+    checksum=$(sha256sum "$RELEASE_FILE" | awk '{print $1}')
+    echo ""
+    echo "SHA256 Checksum for Homebrew Formula:"
+    echo "$checksum"
+fi

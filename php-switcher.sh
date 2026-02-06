@@ -16,6 +16,7 @@ DEFAULT_PHP_VERSION=""
 DEFAULT_MAX_BACKUPS=5
 DEFAULT_AUTO_SWITCH_PHP_VERSION=false
 DEFAULT_CACHE_DIRECTORY=""  # Empty means use default location in ~/.cache/phpswitch
+
 # Module: core.sh
 # PHPSwitch Core Functions
 # Contains essential variables and core functionality
@@ -242,7 +243,7 @@ function core_get_available_php_versions {
             
             # Run searches in background
             brew search /php@[0-9]/ 2>/dev/null | grep '^php@' > "$search_file1" & 
-            brew search /^php$/ 2>/dev/null | grep '^php$' | sed 's/php/php@default/g' > "$search_file2" &
+            brew search /^php$/ 2>/dev/null | sed 's/^php$/php@default/' > "$search_file2" &
             brew_pid=$!
             
             # Wait for up to 10 seconds
@@ -292,13 +293,15 @@ function core_get_available_php_versions {
     # Show a brief spinner while we wait
     local spinner_pid=$!
     local spin='-\|/'
+    local spin_length=${#spin}
     local i=0
     
     echo -n "Searching for available PHP versions..."
     
     while kill -0 $spinner_pid 2>/dev/null; do
         i=$(( (i+1) % 4 ))
-        printf "\rSearching for available PHP versions... ${spin:$i:1}"
+        local current_char="${spin:$i:1}"
+        printf "\rSearching for available PHP versions... %s" "$current_char"
         sleep 0.1
     done
     
@@ -410,6 +413,7 @@ function core_clear_cache {
         utils_show_status "warning" "No cache directory found at $cache_dir"
     fi
 }
+
 # Module: utils.sh
 # PHPSwitch Utility Functions
 # Contains display and validation utilities
@@ -587,11 +591,12 @@ function utils_show_spinner {
     
     while kill -0 $pid 2>/dev/null; do
         i=$(( (i+1) % 4 ))
-        printf "\r$message ${spin:$i:1}"
+        local current_char="${spin:$i:1}"
+        printf "\r%s %s" "$message" "$current_char"
         sleep 0.1
     done
     
-    printf "\r$message Done!   \n"
+    printf "\r%s Done!   \n" "$message"
 }
 
 # Alternative function with dots animation for progress indication
@@ -607,11 +612,11 @@ function utils_show_progress {
         if [ ${#dots} -gt 5 ]; then
             dots="."
         fi
-        printf "\r$message%-6s" "$dots"
+        printf "\r%s%-6s" "$message" "$dots"
         sleep 0.3
     done
     
-    printf "\r$message Done!      \n"
+    printf "\r%s Done!      \n" "$message"
 }
 
 # Function to display success or error message with colors
@@ -1111,6 +1116,65 @@ function utils_compare_versions {
         return 1
     fi
 }
+
+# Function to read PHP version from composer.json
+# Uses grep/sed to avoid jq dependency
+function utils_read_composer_version {
+    local composer_file="$1"
+    
+    if [ ! -f "$composer_file" ]; then
+        return 1
+    fi
+    
+    # 1. Check config.platform.php (highest priority)
+    # We look for "php": "X.Y" inside the file, hoping it's unique enough or we catch the right one.
+    # To be safer without jq, we can try to look for the platform block
+    local platform_php=$(grep -A 10 '"platform"' "$composer_file" 2>/dev/null | grep '"php"' | head -n 1)
+    
+    if [ -n "$platform_php" ]; then
+        # Extract version: "php": "8.1.0" -> 8.1.0
+        local version=$(echo "$platform_php" | sed -E 's/.*"php": *"([^"]+)".*/\1/')
+        # extract major.minor
+        echo "$version" | grep -oE '[0-9]+\.[0-9]+' | head -n 1
+        return 0
+    fi
+    
+    # 2. Check require.php
+    local require_php=$(grep -A 20 '"require"' "$composer_file" 2>/dev/null | grep '"php"' | head -n 1)
+    
+    if [ -n "$require_php" ]; then
+        # Extract version: "php": "^8.1" -> 8.1
+        local version=$(echo "$require_php" | sed -E 's/.*"php": *"([^"]+)".*/\1/')
+        # extract major.minor
+        echo "$version" | grep -oE '[0-9]+\.[0-9]+' | head -n 1
+        return 0
+    fi
+    
+    return 1
+}
+
+# Function to read PHP version from .tool-versions (asdf)
+function utils_read_tool_versions {
+    local tool_file="$1"
+    
+    if [ ! -f "$tool_file" ]; then
+        return 1
+    fi
+    
+    # Look for line starting with php
+    local php_line=$(grep "^php " "$tool_file" 2>/dev/null | head -n 1)
+    
+    if [ -n "$php_line" ]; then
+        # Extract version: php 8.1.0 -> 8.1.0
+        local version=$(echo "$php_line" | awk '{print $2}')
+        # extract major.minor
+        echo "$version" | grep -oE '[0-9]+\.[0-9]+' | head -n 1
+        return 0
+    fi
+    
+    return 1
+}
+
 # Module: shell.sh
 # PHPSwitch Shell Management
 # Handles shell detection and configuration file updates
@@ -1604,39 +1668,65 @@ function version_resolve_php_version {
 function version_check_project {
     local current_dir="$(pwd)"
     local php_version_file=""
-    local supported_files=(".php-version" ".phpversion" ".php")
+    local project_version=""
+    local custom_files=(".php-version" ".phpversion" ".php")
     
     # Look for version files in current directory and parent directories
-    while [ "$current_dir" != "/" ]; do
-        for file in "${supported_files[@]}"; do
+    while [ "$current_dir" != "/" ] && [ "$current_dir" != "." ]; do
+        # 1. Custom PHPSwitch files (Highest Priority)
+        for file in "${custom_files[@]}"; do
             if [ -f "$current_dir/$file" ]; then
                 php_version_file="$current_dir/$file"
+                project_version=$(cat "$php_version_file" | tr -d '[:space:]')
                 core_debug_log "Found PHP version file: $php_version_file"
                 break 2
             fi
         done
+        
+        # 2. composer.json
+        if [ -f "$current_dir/composer.json" ]; then
+            if composer_ver=$(utils_read_composer_version "$current_dir/composer.json"); then
+                if [ -n "$composer_ver" ]; then
+                    php_version_file="$current_dir/composer.json"
+                    project_version="$composer_ver"
+                    core_debug_log "Found PHP version in composer.json: $composer_ver"
+                    break
+                fi
+            fi
+        fi
+        
+        # 3. .tool-versions
+        if [ -f "$current_dir/.tool-versions" ]; then
+            if tool_ver=$(utils_read_tool_versions "$current_dir/.tool-versions"); then
+                if [ -n "$tool_ver" ]; then
+                    php_version_file="$current_dir/.tool-versions"
+                    project_version="$tool_ver"
+                    core_debug_log "Found PHP version in .tool-versions: $tool_ver"
+                    break
+                fi
+            fi
+        fi
+        
+        # Move to parent directory
         current_dir="$(dirname "$current_dir")"
     done
     
-    if [ -n "$php_version_file" ]; then
+    if [ -n "$php_version_file" ] && [ -n "$project_version" ]; then
         # Validate the version file path
         if ! utils_validate_path "$php_version_file"; then
             core_debug_log "Invalid version file path: $php_version_file"
             return 1
         fi
         
-        # Read and validate the project version
-        local project_version=$(cat "$php_version_file" | tr -d '[:space:]')
-        
         # Basic validation: check length and characters
-        if [[ ${#project_version} -gt 32 ]] || [[ -z "$project_version" ]]; then
-            core_debug_log "Invalid version content in $php_version_file"
+        if [[ ${#project_version} -gt 32 ]]; then
+            core_debug_log "Version string too long in $php_version_file"
             return 1
         fi
         
         # Check for potentially dangerous characters
         if [[ "$project_version" =~ [[:cntrl:]] ]] || [[ "$project_version" == *$'\0'* ]]; then
-            core_debug_log "Dangerous characters detected in version file: $php_version_file"
+            core_debug_log "Dangerous characters detected in version string from: $php_version_file"
             return 1
         fi
         
@@ -1673,6 +1763,9 @@ function version_check_project {
                 echo "php@$project_version.0"
                 return 0
             fi
+        else
+             core_debug_log "Unknown version format: $project_version"
+             return 1
         fi
     fi
     
@@ -2745,6 +2838,20 @@ function phpswitch_auto_detect_project() {
                 return
             fi
         done
+
+        # Check for composer.json or .tool-versions using phpswitch helper
+        if [ -f "$current_dir/composer.json" ] || [ -f "$current_dir/.tool-versions" ]; then
+            local version=$(phpswitch --get-project-version 2>/dev/null)
+            if [ -n "$version" ]; then
+                echo "$current_dir:$version" >> "$temp_cache_file"
+                phpswitch --auto-mode > /dev/null 2>&1
+                
+                if [ -w "$(dirname "$cache_file")" ]; then
+                    mv "$temp_cache_file" "$cache_file" 2>/dev/null
+                fi
+                return
+            fi
+        fi
         
         # No PHP version file found, add to cache with empty version
         echo "$current_dir:" >> "$temp_cache_file"
@@ -2855,6 +2962,20 @@ function phpswitch_auto_detect_project() {
                 return
             fi
         done
+
+        # Check for composer.json or .tool-versions using phpswitch helper
+        if [ -f "$current_dir/composer.json" ] || [ -f "$current_dir/.tool-versions" ]; then
+            local version=$(phpswitch --get-project-version 2>/dev/null)
+            if [ -n "$version" ]; then
+                echo "$current_dir:$version" >> "$temp_cache_file"
+                phpswitch --auto-mode > /dev/null 2>&1
+                
+                if [ -w "$(dirname "$cache_file")" ]; then
+                    mv "$temp_cache_file" "$cache_file" 2>/dev/null
+                fi
+                return
+            fi
+        fi
         
         # No PHP version file found, add to cache with empty version
         echo "$current_dir:" >> "$temp_cache_file"
@@ -2958,6 +3079,20 @@ function phpswitch_auto_detect_project --on-variable PWD
                 phpswitch --auto-mode > /dev/null 2>&1
                 
                 # Try to update the main cache file if writable
+                if test -w (dirname "$cache_file")
+                    mv "$temp_cache_file" "$cache_file" 2>/dev/null
+                end
+                return
+            end
+        end
+        
+        # Check for composer.json or .tool-versions using phpswitch helper
+        if test -f "$current_dir/composer.json"; or test -f "$current_dir/.tool-versions"
+            set version (phpswitch --get-project-version 2>/dev/null)
+            if test -n "$version"
+                echo "$current_dir:$version" >> "$temp_cache_file"
+                phpswitch --auto-mode > /dev/null 2>&1
+                
                 if test -w (dirname "$cache_file")
                     mv "$temp_cache_file" "$cache_file" 2>/dev/null
                 end
@@ -3146,6 +3281,14 @@ function cmd_parse_arguments {
             exit 0
         else
             utils_show_status "warning" "No project-specific PHP version found"
+            exit 1
+        fi
+    elif [ "$1" = "--get-project-version" ]; then
+        # Just resolve the project version and print it (used by auto-switch hooks)
+        if version_check_project > /dev/null; then
+            version_check_project
+            exit 0
+        else
             exit 1
         fi
     elif [ "$1" = "--auto-mode" ]; then

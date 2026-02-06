@@ -700,3 +700,61 @@ function utils_compare_versions {
         return 1
     fi
 }
+
+# Function to read PHP version from composer.json
+# Uses grep/sed to avoid jq dependency
+function utils_read_composer_version {
+    local composer_file="$1"
+    
+    if [ ! -f "$composer_file" ]; then
+        return 1
+    fi
+    
+    # 1. Check config.platform.php (highest priority)
+    # We look for "php": "X.Y" inside the file, hoping it's unique enough or we catch the right one.
+    # To be safer without jq, we can try to look for the platform block
+    local platform_php=$(grep -A 10 '"platform"' "$composer_file" 2>/dev/null | grep '"php"' | head -n 1)
+    
+    if [ -n "$platform_php" ]; then
+        # Extract version: "php": "8.1.0" -> 8.1.0
+        local version=$(echo "$platform_php" | sed -E 's/.*"php": *"([^"]+)".*/\1/')
+        # extract major.minor
+        echo "$version" | grep -oE '[0-9]+\.[0-9]+' | head -n 1
+        return 0
+    fi
+    
+    # 2. Check require.php
+    local require_php=$(grep -A 20 '"require"' "$composer_file" 2>/dev/null | grep '"php"' | head -n 1)
+    
+    if [ -n "$require_php" ]; then
+        # Extract version: "php": "^8.1" -> 8.1
+        local version=$(echo "$require_php" | sed -E 's/.*"php": *"([^"]+)".*/\1/')
+        # extract major.minor
+        echo "$version" | grep -oE '[0-9]+\.[0-9]+' | head -n 1
+        return 0
+    fi
+    
+    return 1
+}
+
+# Function to read PHP version from .tool-versions (asdf)
+function utils_read_tool_versions {
+    local tool_file="$1"
+    
+    if [ ! -f "$tool_file" ]; then
+        return 1
+    fi
+    
+    # Look for line starting with php
+    local php_line=$(grep "^php " "$tool_file" 2>/dev/null | head -n 1)
+    
+    if [ -n "$php_line" ]; then
+        # Extract version: php 8.1.0 -> 8.1.0
+        local version=$(echo "$php_line" | awk '{print $2}')
+        # extract major.minor
+        echo "$version" | grep -oE '[0-9]+\.[0-9]+' | head -n 1
+        return 0
+    fi
+    
+    return 1
+}

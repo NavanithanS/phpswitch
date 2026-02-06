@@ -23,39 +23,65 @@ function version_resolve_php_version {
 function version_check_project {
     local current_dir="$(pwd)"
     local php_version_file=""
-    local supported_files=(".php-version" ".phpversion" ".php")
+    local project_version=""
+    local custom_files=(".php-version" ".phpversion" ".php")
     
     # Look for version files in current directory and parent directories
-    while [ "$current_dir" != "/" ]; do
-        for file in "${supported_files[@]}"; do
+    while [ "$current_dir" != "/" ] && [ "$current_dir" != "." ]; do
+        # 1. Custom PHPSwitch files (Highest Priority)
+        for file in "${custom_files[@]}"; do
             if [ -f "$current_dir/$file" ]; then
                 php_version_file="$current_dir/$file"
+                project_version=$(cat "$php_version_file" | tr -d '[:space:]')
                 core_debug_log "Found PHP version file: $php_version_file"
                 break 2
             fi
         done
+        
+        # 2. composer.json
+        if [ -f "$current_dir/composer.json" ]; then
+            if composer_ver=$(utils_read_composer_version "$current_dir/composer.json"); then
+                if [ -n "$composer_ver" ]; then
+                    php_version_file="$current_dir/composer.json"
+                    project_version="$composer_ver"
+                    core_debug_log "Found PHP version in composer.json: $composer_ver"
+                    break
+                fi
+            fi
+        fi
+        
+        # 3. .tool-versions
+        if [ -f "$current_dir/.tool-versions" ]; then
+            if tool_ver=$(utils_read_tool_versions "$current_dir/.tool-versions"); then
+                if [ -n "$tool_ver" ]; then
+                    php_version_file="$current_dir/.tool-versions"
+                    project_version="$tool_ver"
+                    core_debug_log "Found PHP version in .tool-versions: $tool_ver"
+                    break
+                fi
+            fi
+        fi
+        
+        # Move to parent directory
         current_dir="$(dirname "$current_dir")"
     done
     
-    if [ -n "$php_version_file" ]; then
+    if [ -n "$php_version_file" ] && [ -n "$project_version" ]; then
         # Validate the version file path
         if ! utils_validate_path "$php_version_file"; then
             core_debug_log "Invalid version file path: $php_version_file"
             return 1
         fi
         
-        # Read and validate the project version
-        local project_version=$(cat "$php_version_file" | tr -d '[:space:]')
-        
         # Basic validation: check length and characters
-        if [[ ${#project_version} -gt 32 ]] || [[ -z "$project_version" ]]; then
-            core_debug_log "Invalid version content in $php_version_file"
+        if [[ ${#project_version} -gt 32 ]]; then
+            core_debug_log "Version string too long in $php_version_file"
             return 1
         fi
         
         # Check for potentially dangerous characters
         if [[ "$project_version" =~ [[:cntrl:]] ]] || [[ "$project_version" == *$'\0'* ]]; then
-            core_debug_log "Dangerous characters detected in version file: $php_version_file"
+            core_debug_log "Dangerous characters detected in version string from: $php_version_file"
             return 1
         fi
         
@@ -92,6 +118,9 @@ function version_check_project {
                 echo "php@$project_version.0"
                 return 0
             fi
+        else
+             core_debug_log "Unknown version format: $project_version"
+             return 1
         fi
     fi
     

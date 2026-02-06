@@ -112,6 +112,14 @@ function cmd_parse_arguments {
             utils_show_status "warning" "No project-specific PHP version found"
             exit 1
         fi
+    elif [ "$1" = "--get-project-version" ]; then
+        # Just resolve the project version and print it (used by auto-switch hooks)
+        if version_check_project > /dev/null; then
+            version_check_project
+            exit 0
+        else
+            exit 1
+        fi
     elif [ "$1" = "--auto-mode" ]; then
         # Special quiet mode for auto-switching - used by shell hooks
         if version_check_project > /dev/null; then
