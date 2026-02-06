@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Version: 1.4.3
+# Version: 1.4.4
 # PHPSwitch - PHP Version Manager for macOS
 # This script helps switch between different PHP versions installed via Homebrew
 # and updates shell configuration files (.zshrc, .bashrc, etc.) accordingly

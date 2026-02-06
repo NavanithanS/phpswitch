@@ -12,7 +12,7 @@ mkdir -p "$BASE_DIR/lib" "$BASE_DIR/config"
 if [ -f "php-switcher.sh" ]; then
     VERSION=$(grep "^# Version:" php-switcher.sh | cut -d":" -f2 | tr -d " ")
 else
-    VERSION="1.4.3" # Default version if script not found
+    VERSION="1.4.4" # Default version if script not found
 fi
 
 echo "Using version: $VERSION"
