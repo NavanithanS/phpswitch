@@ -34,6 +34,21 @@ function core_load_config {
     else
         core_debug_log "No configuration file found at $CONFIG_FILE"
     fi
+    
+    # Validate Homebrew prefix for security
+    if [[ -z "$HOMEBREW_PREFIX" ]]; then
+        echo "Error: Could not determine Homebrew prefix" >&2
+        exit 1
+    fi
+    
+    # Basic validation for Homebrew prefix (more permissive than utils_validate_path)
+    if [[ "$HOMEBREW_PREFIX" != /* ]] || [[ "$HOMEBREW_PREFIX" == *".."* ]] || [[ ${#HOMEBREW_PREFIX} -gt 4096 ]]; then
+        echo "Error: Invalid Homebrew prefix path: $HOMEBREW_PREFIX" >&2
+        exit 1
+    fi
+    
+    # Setup automatic cleanup for temporary files
+    utils_setup_temp_cleanup_trap
 }
 
 # Create default configuration
@@ -194,7 +209,8 @@ function core_get_available_php_versions {
     }
     
     # Create a temporary file for the new cache
-    local temp_cache_file=$(mktemp)
+    local temp_cache_file
+    temp_cache_file=$(utils_create_secure_temp_file)
     
     # Try to get actual versions with a timeout
     (
@@ -202,12 +218,13 @@ function core_get_available_php_versions {
         core_debug_log "Searching for PHP versions with Homebrew..."
         {
             # Use temp files for output
-            local search_file1=$(mktemp)
-            local search_file2=$(mktemp)
+            local search_file1 search_file2
+            search_file1=$(utils_create_secure_temp_file)
+            search_file2=$(utils_create_secure_temp_file)
             
             # Run searches in background
             brew search /php@[0-9]/ 2>/dev/null | grep '^php@' > "$search_file1" & 
-            brew search /^php$/ 2>/dev/null | grep '^php$' | sed 's/php/php@default/g' > "$search_file2" &
+            brew search /^php$/ 2>/dev/null | sed 's/^php$/php@default/' > "$search_file2" &
             brew_pid=$!
             
             # Wait for up to 10 seconds
@@ -257,13 +274,15 @@ function core_get_available_php_versions {
     # Show a brief spinner while we wait
     local spinner_pid=$!
     local spin='-\|/'
+    local spin_length=${#spin}
     local i=0
     
     echo -n "Searching for available PHP versions..."
     
     while kill -0 $spinner_pid 2>/dev/null; do
         i=$(( (i+1) % 4 ))
-        printf "\rSearching for available PHP versions... ${spin:$i:1}"
+        local current_char="${spin:$i:1}"
+        printf "\rSearching for available PHP versions... %s" "$current_char"
         sleep 0.1
     done
     

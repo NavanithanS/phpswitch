@@ -78,8 +78,15 @@ function auto_install_zsh {
     # Create backup before modifying
     if [ -f "$rc_file" ]; then
         local backup_file="${rc_file}.bak.$(date +%Y%m%d%H%M%S)"
-        cp "$rc_file" "$backup_file" 2>/dev/null
-        utils_show_status "info" "Created backup at ${backup_file}"
+        
+        # Validate backup file path
+        if utils_validate_path "$backup_file"; then
+            if cp "$rc_file" "$backup_file" 2>/dev/null; then
+                # Set secure permissions (readable/writable by owner only)
+                chmod 600 "$backup_file" 2>/dev/null
+                utils_show_status "info" "Created secure backup at ${backup_file}"
+            fi
+        fi
     fi
     
     # Add the hook function to the rc file
@@ -134,6 +141,20 @@ function phpswitch_auto_detect_project() {
                 return
             fi
         done
+
+        # Check for composer.json or .tool-versions using phpswitch helper
+        if [ -f "$current_dir/composer.json" ] || [ -f "$current_dir/.tool-versions" ]; then
+            local version=$(phpswitch --get-project-version 2>/dev/null)
+            if [ -n "$version" ]; then
+                echo "$current_dir:$version" >> "$temp_cache_file"
+                phpswitch --auto-mode > /dev/null 2>&1
+                
+                if [ -w "$(dirname "$cache_file")" ]; then
+                    mv "$temp_cache_file" "$cache_file" 2>/dev/null
+                fi
+                return
+            fi
+        fi
         
         # No PHP version file found, add to cache with empty version
         echo "$current_dir:" >> "$temp_cache_file"
@@ -181,8 +202,15 @@ function auto_install_bash {
     # Create backup before modifying
     if [ -f "$rc_file" ]; then
         local backup_file="${rc_file}.bak.$(date +%Y%m%d%H%M%S)"
-        cp "$rc_file" "$backup_file" 2>/dev/null
-        utils_show_status "info" "Created backup at ${backup_file}"
+        
+        # Validate backup file path
+        if utils_validate_path "$backup_file"; then
+            if cp "$rc_file" "$backup_file" 2>/dev/null; then
+                # Set secure permissions (readable/writable by owner only)
+                chmod 600 "$backup_file" 2>/dev/null
+                utils_show_status "info" "Created secure backup at ${backup_file}"
+            fi
+        fi
     fi
     
     # Add the hook function to the rc file
@@ -237,6 +265,20 @@ function phpswitch_auto_detect_project() {
                 return
             fi
         done
+
+        # Check for composer.json or .tool-versions using phpswitch helper
+        if [ -f "$current_dir/composer.json" ] || [ -f "$current_dir/.tool-versions" ]; then
+            local version=$(phpswitch --get-project-version 2>/dev/null)
+            if [ -n "$version" ]; then
+                echo "$current_dir:$version" >> "$temp_cache_file"
+                phpswitch --auto-mode > /dev/null 2>&1
+                
+                if [ -w "$(dirname "$cache_file")" ]; then
+                    mv "$temp_cache_file" "$cache_file" 2>/dev/null
+                fi
+                return
+            fi
+        fi
         
         # No PHP version file found, add to cache with empty version
         echo "$current_dir:" >> "$temp_cache_file"
@@ -279,8 +321,15 @@ function auto_install_fish {
     # Create backup before modifying
     if [ -f "$rc_file" ]; then
         local backup_file="${rc_file}.bak.$(date +%Y%m%d%H%M%S)"
-        cp "$rc_file" "$backup_file" 2>/dev/null
-        utils_show_status "info" "Created backup at ${backup_file}"
+        
+        # Validate backup file path
+        if utils_validate_path "$backup_file"; then
+            if cp "$rc_file" "$backup_file" 2>/dev/null; then
+                # Set secure permissions (readable/writable by owner only)
+                chmod 600 "$backup_file" 2>/dev/null
+                utils_show_status "info" "Created secure backup at ${backup_file}"
+            fi
+        fi
     fi
     
     # Add the hook function to the rc file
@@ -333,6 +382,20 @@ function phpswitch_auto_detect_project --on-variable PWD
                 phpswitch --auto-mode > /dev/null 2>&1
                 
                 # Try to update the main cache file if writable
+                if test -w (dirname "$cache_file")
+                    mv "$temp_cache_file" "$cache_file" 2>/dev/null
+                end
+                return
+            end
+        end
+        
+        # Check for composer.json or .tool-versions using phpswitch helper
+        if test -f "$current_dir/composer.json"; or test -f "$current_dir/.tool-versions"
+            set version (phpswitch --get-project-version 2>/dev/null)
+            if test -n "$version"
+                echo "$current_dir:$version" >> "$temp_cache_file"
+                phpswitch --auto-mode > /dev/null 2>&1
+                
                 if test -w (dirname "$cache_file")
                     mv "$temp_cache_file" "$cache_file" 2>/dev/null
                 end

@@ -23,22 +23,67 @@ function version_resolve_php_version {
 function version_check_project {
     local current_dir="$(pwd)"
     local php_version_file=""
-    local supported_files=(".php-version" ".phpversion" ".php")
+    local project_version=""
+    local custom_files=(".php-version" ".phpversion" ".php")
     
     # Look for version files in current directory and parent directories
-    while [ "$current_dir" != "/" ]; do
-        for file in "${supported_files[@]}"; do
+    while [ "$current_dir" != "/" ] && [ "$current_dir" != "." ]; do
+        # 1. Custom PHPSwitch files (Highest Priority)
+        for file in "${custom_files[@]}"; do
             if [ -f "$current_dir/$file" ]; then
                 php_version_file="$current_dir/$file"
+                project_version=$(cat "$php_version_file" | tr -d '[:space:]')
                 core_debug_log "Found PHP version file: $php_version_file"
                 break 2
             fi
         done
+        
+        # 2. composer.json
+        if [ -f "$current_dir/composer.json" ]; then
+            if composer_ver=$(utils_read_composer_version "$current_dir/composer.json"); then
+                if [ -n "$composer_ver" ]; then
+                    php_version_file="$current_dir/composer.json"
+                    project_version="$composer_ver"
+                    core_debug_log "Found PHP version in composer.json: $composer_ver"
+                    break
+                fi
+            fi
+        fi
+        
+        # 3. .tool-versions
+        if [ -f "$current_dir/.tool-versions" ]; then
+            if tool_ver=$(utils_read_tool_versions "$current_dir/.tool-versions"); then
+                if [ -n "$tool_ver" ]; then
+                    php_version_file="$current_dir/.tool-versions"
+                    project_version="$tool_ver"
+                    core_debug_log "Found PHP version in .tool-versions: $tool_ver"
+                    break
+                fi
+            fi
+        fi
+        
+        # Move to parent directory
         current_dir="$(dirname "$current_dir")"
     done
     
-    if [ -n "$php_version_file" ]; then
-        local project_version=$(cat "$php_version_file" | tr -d '[:space:]')
+    if [ -n "$php_version_file" ] && [ -n "$project_version" ]; then
+        # Validate the version file path
+        if ! utils_validate_path "$php_version_file"; then
+            core_debug_log "Invalid version file path: $php_version_file"
+            return 1
+        fi
+        
+        # Basic validation: check length and characters
+        if [[ ${#project_version} -gt 32 ]]; then
+            core_debug_log "Version string too long in $php_version_file"
+            return 1
+        fi
+        
+        # Check for potentially dangerous characters
+        if [[ "$project_version" =~ [[:cntrl:]] ]] || [[ "$project_version" == *$'\0'* ]]; then
+            core_debug_log "Dangerous characters detected in version string from: $php_version_file"
+            return 1
+        fi
         
         # Handle different version formats
         if [[ "$project_version" == php@* ]]; then
@@ -73,6 +118,9 @@ function version_check_project {
                 echo "php@$project_version.0"
                 return 0
             fi
+        else
+             core_debug_log "Unknown version format: $project_version"
+             return 1
         fi
     fi
     
@@ -276,6 +324,11 @@ function version_uninstall_php {
     if brew services list | grep -q "$service_name"; then
         utils_show_status "info" "Stopping PHP-FPM service for $version..."
         brew services stop "$service_name"
+        
+        # Clean up service files to avoid issues on future installations
+        if command -v fpm_cleanup_service &>/dev/null; then
+            fpm_cleanup_service "$version"
+        fi
     fi
     
     # Unlink the PHP version if it's linked
@@ -332,7 +385,7 @@ function version_uninstall_php {
     fi
 }
 
-# Function to switch PHP version with enhanced PATH handling
+# Improved function to switch PHP version with enhanced PATH handling
 function version_switch_php {
     local new_version="$1"
     local is_installed="$2"
@@ -445,9 +498,11 @@ function version_switch_php {
             
             # Try to directly create symlinks
             local php_bin_path="$HOMEBREW_PREFIX/opt/$brew_version/bin"
+            local php_sbin_path="$HOMEBREW_PREFIX/opt/$brew_version/sbin"
             
             if [ ! -d "$php_bin_path" ] && [ "$new_version" = "php@default" ]; then
                 php_bin_path="$HOMEBREW_PREFIX/opt/php/bin"
+                php_sbin_path="$HOMEBREW_PREFIX/opt/php/sbin"
             fi
             
             if [ -d "$php_bin_path" ]; then
@@ -465,8 +520,11 @@ function version_switch_php {
         fi
     fi
     
-    # Update shell RC file
-    shell_update_rc "$new_version"
+    # Create and update shell configuration
+    local instructions_file=$(shell_update_rc "$new_version")
+    
+    # Create a reload script for immediate use
+    local reload_script=$(shell_create_reload_script "$new_version")
     
     # Restart PHP-FPM if it's being used
     fpm_restart "$new_version"
@@ -478,147 +536,94 @@ function version_switch_php {
         export SOURCED=true
         utils_show_status "info" "Applying changes to current shell..."
         
-        # Directly modify the PATH to ensure the changes take effect immediately
-        if ! shell_force_reload "$new_version"; then
-            # If shell_force_reload failed, give clear instructions
-            shell_type=$(shell_detect_shell)
-            echo ""
-            echo "To apply the changes immediately, copy-paste this command:"
-            
-            case "$shell_type" in
-                "zsh")
-                    echo "export PATH=\"$php_bin_path:$php_sbin_path:\$PATH\"; hash -r"
-                    ;;
-                "bash")
-                    echo "export PATH=\"$php_bin_path:$php_sbin_path:\$PATH\"; hash -r"
-                    ;;
-                "fish")
-                    echo "set -gx PATH $php_bin_path $php_sbin_path \$PATH; and rehash"
-                    ;;
-                *)
-                    echo "export PATH=\"$php_bin_path:$php_sbin_path:\$PATH\""
-                    ;;
-            esac
-            echo ""
-        fi
-        
-        # Verify the active PHP version
-        CURRENT_PHP_VERSION=$(php -v 2>/dev/null | head -n 1 | cut -d " " -f 2 | cut -d "." -f 1,2)
-        
-        if [ "$new_version" = "php@default" ]; then
-            # For default PHP, we need to get the expected version from the actual binary
-            DEFAULT_PHP_PATH="$HOMEBREW_PREFIX/opt/php/bin/php"
-            if [ -f "$DEFAULT_PHP_PATH" ]; then
-                EXPECTED_VERSION=$($DEFAULT_PHP_PATH -v 2>/dev/null | head -n 1 | cut -d " " -f 2 | cut -d "." -f 1,2)
-            else
-                EXPECTED_VERSION="unknown"
-            fi
-        else
-            EXPECTED_VERSION=$(echo "$new_version" | grep -o "[0-9]\.[0-9]")
-        fi
-        
-        if [ "$CURRENT_PHP_VERSION" = "$EXPECTED_VERSION" ]; then
-            utils_show_status "success" "Active PHP version is now: $CURRENT_PHP_VERSION"
+        # Try to directly modify PATH to make changes immediate
+        if shell_force_reload "$new_version"; then
+            utils_show_status "success" "Active PHP version is now: $(php -v | head -n 1 | cut -d " " -f 2)"
             php -v | head -n 1
-            
-            # Create a PATH validation command to check in new sessions
-            echo ""
-            echo "To verify PHP version in new terminal sessions, use this command:"
-            echo "which php && php -v | head -n 1"
-            
-            # Show actual binary location
-            echo ""
-            echo "PHP binary location: $(which php)"
-            if [ -L "$(which php)" ]; then
-                echo "Symlinked to: $(readlink $(which php))"
-            fi
         else
-            utils_show_status "warning" "PHP version switch was not fully applied to the current shell"
-            echo "Expected PHP version: $EXPECTED_VERSION"
-            echo "Current PHP version: $(php -v | head -n 1)"
-            echo ""
-            
+            # If direct PATH modification failed, provide clear instructions
             shell_type=$(shell_detect_shell)
-            
-            echo "To activate the new PHP version in your current shell, run:"
-            case "$shell_type" in
-                "zsh")
-                    echo "source ~/.zshrc"
-                    ;;
-                "bash")
-                    if [ -f ~/.bashrc ]; then
-                        echo "source ~/.bashrc"
-                    elif [ -f ~/.bash_profile ]; then
-                        echo "source ~/.bash_profile"
-                    else
-                        echo "source ~/.profile"
-                    fi
-                    ;;
-                "fish")
-                    echo "source ~/.config/fish/config.fish"
-                    ;;
-                *)
-                    echo "source ~/.profile"
-                    ;;
-            esac
-            
+            utils_show_status "warning" "Could not update PATH in current shell"
             echo ""
-            echo "Or, you can directly update your PATH for this session:"
+            echo "✨ To activate PHP $new_version in your current terminal, run this command:"
+            
             case "$shell_type" in
                 "zsh"|"bash")
-                    echo "export PATH=\"$php_bin_path:$php_sbin_path:\$PATH\"; hash -r"
+                    echo "source \"$reload_script\""
                     ;;
                 "fish")
-                    echo "set -gx PATH $php_bin_path $php_sbin_path \$PATH; and rehash"
+                    echo "source \"$reload_script\""
                     ;;
                 *)
-                    echo "export PATH=\"$php_bin_path:$php_sbin_path:\$PATH\""
+                    echo "source \"$reload_script\""
                     ;;
             esac
-            
-            echo ""
-            echo "Or restart your terminal session to use the new PHP version."
         fi
+        
+        # Show actual binary location
+        echo ""
+        echo "PHP binary location: $(which php)"
+        if [ -L "$(which php)" ]; then
+            echo "Symlinked to: $(readlink $(which php))"
+        fi
+        
+        # Add permanent instructions
+        echo ""
+        echo "⚠️ For permanent effect, EITHER:"
+        echo "  1. Open a new terminal window, OR"
+        echo "  2. Run this command to reload your shell configuration:"
+        
+        case "$shell_type" in
+            "zsh")
+                echo "     source ~/.zshrc"
+                ;;
+            "bash")
+                if [ -f ~/.bashrc ]; then
+                    echo "     source ~/.bashrc"
+                elif [ -f ~/.bash_profile ]; then
+                    echo "     source ~/.bash_profile"
+                else
+                    echo "     source ~/.profile"
+                fi
+                ;;
+            "fish")
+                echo "     source ~/.config/fish/config.fish"
+                ;;
+            *)
+                echo "     source ~/.profile"
+                ;;
+        esac
     else
         shell_type=$(shell_detect_shell)
         
         echo "To apply the changes to your current terminal, run:"
+        echo "source \"$reload_script\""
+        
+        echo ""
+        echo "For permanent effect, EITHER:"
+        echo "  1. Open a new terminal window, OR"
+        echo "  2. Run this command to reload your shell configuration:"
+        
         case "$shell_type" in
             "zsh")
-                echo "source ~/.zshrc"
+                echo "     source ~/.zshrc"
                 ;;
             "bash")
                 if [ -f ~/.bashrc ]; then
-                    echo "source ~/.bashrc"
+                    echo "     source ~/.bashrc"
                 elif [ -f ~/.bash_profile ]; then
-                    echo "source ~/.bash_profile"
+                    echo "     source ~/.bash_profile"
                 else
-                    echo "source ~/.profile"
+                    echo "     source ~/.profile"
                 fi
                 ;;
             "fish")
-                echo "source ~/.config/fish/config.fish"
+                echo "     source ~/.config/fish/config.fish"
                 ;;
             *)
-                echo "source ~/.profile"
+                echo "     source ~/.profile"
                 ;;
         esac
-        
-        echo ""
-        echo "Or, you can directly update your PATH for this session:"
-        case "$shell_type" in
-            "zsh"|"bash")
-                echo "export PATH=\"$php_bin_path:$php_sbin_path:\$PATH\"; hash -r"
-                ;;
-            "fish")
-                echo "set -gx PATH $php_bin_path $php_sbin_path \$PATH; and rehash"
-                ;;
-            *)
-                echo "export PATH=\"$php_bin_path:$php_sbin_path:\$PATH\""
-                ;;
-        esac
-        
-        echo "Then verify with: php -v"
     fi
 }
 

@@ -30,7 +30,13 @@ echo ""
 CACHE_DIR="$HOME/.cache/phpswitch"
 PARENT_DIR="$HOME/.cache"
 CONFIG_FILE="$HOME/.phpswitch.conf"
-USERNAME=$(whoami)
+# Get secure username with validation
+USERNAME=$(id -un)
+# Validate username to prevent command injection
+if [[ ! "$USERNAME" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+    echo -e "${RED}Error: Invalid username detected. Exiting for security.${NC}"
+    exit 1
+fi
 
 # Function to check and display permissions
 check_permissions() {

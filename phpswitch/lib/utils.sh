@@ -10,6 +10,160 @@ if [ -t 1 ]; then
     fi
 fi
 
+# Security: Path validation functions
+function utils_validate_path {
+    local path="$1"
+    local allow_relative="${2:-false}"
+    
+    # Check for empty path
+    if [[ -z "$path" ]]; then
+        return 1
+    fi
+    
+    # Check for path traversal attempts
+    if [[ "$path" == *".."* ]]; then
+        core_debug_log "Path validation failed: path traversal detected in '$path'"
+        return 1
+    fi
+    
+    # Check for null bytes using a more robust method
+    # Use test with -z and command substitution to detect null bytes
+    if [ -n "$(printf '%s' "$path" | tr -d '[:print:][:space:]')" ]; then
+        core_debug_log "Path validation failed: non-printable characters detected in '$path'"
+        return 1
+    fi
+    
+    # If relative paths are not allowed, ensure it's absolute
+    if [[ "$allow_relative" != "true" ]] && [[ "$path" != /* ]]; then
+        core_debug_log "Path validation failed: relative path not allowed '$path'"
+        return 1
+    fi
+    
+    # Check path length (prevent extremely long paths)
+    if [[ ${#path} -gt 4096 ]]; then
+        core_debug_log "Path validation failed: path too long '$path'"
+        return 1
+    fi
+    
+    # Check for potentially dangerous characters
+    if [[ "$path" =~ [[:cntrl:]] ]]; then
+        core_debug_log "Path validation failed: control characters detected in '$path'"
+        return 1
+    fi
+    
+    return 0
+}
+
+# Security: Validate PHP version string
+function utils_validate_version {
+    local version="$1"
+    
+    # Check for empty version
+    if [[ -z "$version" ]]; then
+        return 1
+    fi
+    
+    # Allow standard PHP version patterns: php@8.1, 8.1, php, etc.
+    if [[ "$version" =~ ^(php(@[0-9]+\.[0-9]+)?|[0-9]+\.[0-9]+|default)$ ]]; then
+        return 0
+    fi
+    
+    core_debug_log "Version validation failed: invalid version format '$version'"
+    return 1
+}
+
+# Security: Validate username string
+function utils_validate_username {
+    local username="$1"
+    
+    # Check for empty username
+    if [[ -z "$username" ]]; then
+        return 1
+    fi
+    
+    # Allow only alphanumeric characters, dots, underscores, and hyphens
+    if [[ "$username" =~ ^[a-zA-Z0-9._-]+$ ]] && [[ ${#username} -le 32 ]]; then
+        return 0
+    fi
+    
+    core_debug_log "Username validation failed: invalid username '$username'"
+    return 1
+}
+
+# Security: Array to track temporary files for cleanup
+declare -a TEMP_FILES_TO_CLEANUP=()
+declare -a TEMP_DIRS_TO_CLEANUP=()
+
+# Security: Create secure temporary file with automatic cleanup
+function utils_create_secure_temp_file {
+    local temp_file
+    temp_file=$(mktemp)
+    
+    if [[ -n "$temp_file" ]] && [[ -f "$temp_file" ]]; then
+        # Set secure permissions (readable/writable by owner only)
+        chmod 600 "$temp_file"
+        
+        # Track for cleanup
+        TEMP_FILES_TO_CLEANUP+=("$temp_file")
+        
+        echo "$temp_file"
+        return 0
+    else
+        core_debug_log "Failed to create secure temporary file"
+        return 1
+    fi
+}
+
+# Security: Create secure temporary directory with automatic cleanup
+function utils_create_secure_temp_dir {
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    
+    if [[ -n "$temp_dir" ]] && [[ -d "$temp_dir" ]]; then
+        # Set secure permissions (accessible by owner only)
+        chmod 700 "$temp_dir"
+        
+        # Track for cleanup
+        TEMP_DIRS_TO_CLEANUP+=("$temp_dir")
+        
+        echo "$temp_dir"
+        return 0
+    else
+        core_debug_log "Failed to create secure temporary directory"
+        return 1
+    fi
+}
+
+# Security: Cleanup all tracked temporary files and directories
+function utils_cleanup_temp_files {
+    local item
+    
+    # Clean up temporary files
+    for item in "${TEMP_FILES_TO_CLEANUP[@]}"; do
+        if [[ -f "$item" ]]; then
+            rm -f "$item" 2>/dev/null
+            core_debug_log "Cleaned up temporary file: $item"
+        fi
+    done
+    
+    # Clean up temporary directories
+    for item in "${TEMP_DIRS_TO_CLEANUP[@]}"; do
+        if [[ -d "$item" ]]; then
+            rm -rf "$item" 2>/dev/null
+            core_debug_log "Cleaned up temporary directory: $item"
+        fi
+    done
+    
+    # Clear the arrays
+    TEMP_FILES_TO_CLEANUP=()
+    TEMP_DIRS_TO_CLEANUP=()
+}
+
+# Security: Setup trap for automatic cleanup
+function utils_setup_temp_cleanup_trap {
+    trap 'utils_cleanup_temp_files; exit' INT TERM EXIT
+}
+
 # Function to display a spinning animation for long-running processes
 function utils_show_spinner {
     local message="$1"
@@ -21,11 +175,12 @@ function utils_show_spinner {
     
     while kill -0 $pid 2>/dev/null; do
         i=$(( (i+1) % 4 ))
-        printf "\r$message ${spin:$i:1}"
+        local current_char="${spin:$i:1}"
+        printf "\r%s %s" "$message" "$current_char"
         sleep 0.1
     done
     
-    printf "\r$message Done!   \n"
+    printf "\r%s Done!   \n" "$message"
 }
 
 # Alternative function with dots animation for progress indication
@@ -41,11 +196,11 @@ function utils_show_progress {
         if [ ${#dots} -gt 5 ]; then
             dots="."
         fi
-        printf "\r$message%-6s" "$dots"
+        printf "\r%s%-6s" "$message" "$dots"
         sleep 0.3
     done
     
-    printf "\r$message Done!      \n"
+    printf "\r%s Done!      \n" "$message"
 }
 
 # Function to display success or error message with colors
@@ -446,7 +601,14 @@ EOL
                     
                     if [ ! -w "$cache_dir" ]; then
                         # Try ownership change
-                        sudo chown "$(whoami)" "$cache_dir" 2>/dev/null
+                        # Get secure username and validate it
+                        local username
+                        username="$(id -un)"
+                        if utils_validate_username "$username"; then
+                            sudo chown "$username" "$cache_dir" 2>/dev/null
+                        else
+                            utils_show_status "error" "Invalid username detected, skipping ownership change"
+                        fi
                         
                         if [ ! -w "$cache_dir" ]; then
                             utils_show_status "error" "Could not fix permissions with standard methods"
@@ -537,4 +699,62 @@ function utils_compare_versions {
     else
         return 1
     fi
+}
+
+# Function to read PHP version from composer.json
+# Uses grep/sed to avoid jq dependency
+function utils_read_composer_version {
+    local composer_file="$1"
+    
+    if [ ! -f "$composer_file" ]; then
+        return 1
+    fi
+    
+    # 1. Check config.platform.php (highest priority)
+    # We look for "php": "X.Y" inside the file, hoping it's unique enough or we catch the right one.
+    # To be safer without jq, we can try to look for the platform block
+    local platform_php=$(grep -A 10 '"platform"' "$composer_file" 2>/dev/null | grep '"php"' | head -n 1)
+    
+    if [ -n "$platform_php" ]; then
+        # Extract version: "php": "8.1.0" -> 8.1.0
+        local version=$(echo "$platform_php" | sed -E 's/.*"php": *"([^"]+)".*/\1/')
+        # extract major.minor
+        echo "$version" | grep -oE '[0-9]+\.[0-9]+' | head -n 1
+        return 0
+    fi
+    
+    # 2. Check require.php
+    local require_php=$(grep -A 20 '"require"' "$composer_file" 2>/dev/null | grep '"php"' | head -n 1)
+    
+    if [ -n "$require_php" ]; then
+        # Extract version: "php": "^8.1" -> 8.1
+        local version=$(echo "$require_php" | sed -E 's/.*"php": *"([^"]+)".*/\1/')
+        # extract major.minor
+        echo "$version" | grep -oE '[0-9]+\.[0-9]+' | head -n 1
+        return 0
+    fi
+    
+    return 1
+}
+
+# Function to read PHP version from .tool-versions (asdf)
+function utils_read_tool_versions {
+    local tool_file="$1"
+    
+    if [ ! -f "$tool_file" ]; then
+        return 1
+    fi
+    
+    # Look for line starting with php
+    local php_line=$(grep "^php " "$tool_file" 2>/dev/null | head -n 1)
+    
+    if [ -n "$php_line" ]; then
+        # Extract version: php 8.1.0 -> 8.1.0
+        local version=$(echo "$php_line" | awk '{print $2}')
+        # extract major.minor
+        echo "$version" | grep -oE '[0-9]+\.[0-9]+' | head -n 1
+        return 0
+    fi
+    
+    return 1
 }

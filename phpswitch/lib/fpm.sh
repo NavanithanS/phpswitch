@@ -29,6 +29,65 @@ function fpm_stop_other_services {
     done
 }
 
+# Function to clean up PHP-FPM service files and fix permissions
+function fpm_cleanup_service {
+    local version="$1"
+    local service_name=$(fpm_get_service_name "$version")
+    
+    utils_show_status "info" "Cleaning up PHP-FPM service files for $service_name..."
+    
+    # Stop the service first
+    brew services stop "$service_name" >/dev/null 2>&1
+    
+    # Find and remove LaunchAgent/LaunchDaemon files
+    local launch_agent="$HOME/Library/LaunchAgents/homebrew.mxcl.$service_name.plist"
+    local launch_daemon="/Library/LaunchDaemons/homebrew.mxcl.$service_name.plist"
+    
+    if [ -f "$launch_agent" ]; then
+        utils_show_status "info" "Removing LaunchAgent file: $launch_agent"
+        rm -f "$launch_agent" 2>/dev/null
+    fi
+    
+    if [ -f "$launch_daemon" ]; then
+        utils_show_status "info" "Removing LaunchDaemon file (requires sudo): $launch_daemon"
+        sudo rm -f "$launch_daemon" 2>/dev/null
+    fi
+    
+    # Reset permissions if needed
+    local cellar_path="$HOMEBREW_PREFIX/Cellar/$service_name"
+    local opt_path="$HOMEBREW_PREFIX/opt/$service_name"
+    
+    if [ -d "$cellar_path" ]; then
+        utils_show_status "info" "Resetting permissions for: $cellar_path"
+        # Get secure username and validate it
+        local username
+        username="$(id -un)"
+        if utils_validate_username "$username"; then
+            sudo chown -R "$username" "$cellar_path" 2>/dev/null
+        else
+            utils_show_status "error" "Invalid username detected, skipping permission reset"
+        fi
+    fi
+    
+    if [ -d "$opt_path" ]; then
+        utils_show_status "info" "Resetting permissions for: $opt_path"
+        # Get secure username and validate it
+        local username
+        username="$(id -un)"
+        if utils_validate_username "$username"; then
+            sudo chown -R "$username" "$opt_path" 2>/dev/null
+        else
+            utils_show_status "error" "Invalid username detected, skipping permission reset"
+        fi
+    fi
+    
+    # Run brew services cleanup to clear stale services
+    utils_show_status "info" "Running brew services cleanup..."
+    brew services cleanup >/dev/null 2>&1
+    
+    utils_show_status "success" "Service cleanup completed for $service_name"
+}
+
 # Enhanced restart_php_fpm function with better error handling
 function fpm_restart {
     local version="$1"
@@ -55,20 +114,47 @@ function fpm_restart {
         else
             utils_show_status "warning" "Failed to restart service: $restart_output"
             
-            # Check for specific errors
-            if echo "$restart_output" | grep -q "Permission denied"; then
-                utils_show_status "warning" "Permission denied. This could be due to file permissions or locked service files."
-                echo -n "Would you like to try with sudo? (y/n): "
+            # Check for specific error patterns
+            if echo "$restart_output" | grep -q "Bootstrap failed: 5: Input/output error"; then
+                utils_show_status "warning" "Detected bootstrap error. This usually indicates service configuration issues."
+                echo -n "Would you like to try automatic service cleanup and repair? (y/n): "
                 
-                if [ "$(utils_validate_yes_no "Try with sudo?" "y")" = "y" ]; then
-                    utils_show_status "info" "Trying with sudo..."
-                    local sudo_output=$(sudo brew services restart "$service_name" 2>&1)
-                    if echo "$sudo_output" | grep -q "Successfully"; then
-                        utils_show_status "success" "PHP-FPM service restarted successfully with sudo"
+                if [ "$(utils_validate_yes_no "Try service cleanup?" "y")" = "y" ]; then
+                    # Run cleanup and try again
+                    fpm_cleanup_service "$version"
+                    utils_show_status "info" "Trying restart after cleanup..."
+                    local retry_output=$(brew services start "$service_name" 2>&1)
+                    
+                    if echo "$retry_output" | grep -q "Successfully"; then
+                        utils_show_status "success" "PHP-FPM service started successfully after cleanup"
                     else
-                        utils_show_status "error" "Failed to restart service with sudo: $sudo_output"
-                        echo "You may need to restart manually with:"
-                        echo "sudo brew services restart $service_name"
+                        utils_show_status "error" "Failed to start service after cleanup: $retry_output"
+                        echo "You may need to restart your computer or reinstall PHP $version"
+                        echo "Try running: brew reinstall $service_name"
+                    fi
+                fi
+            # Check for other error types
+            elif echo "$restart_output" | grep -q "Permission denied"; then
+                utils_show_status "warning" "Permission denied. This could be due to file permissions or locked service files."
+                echo -n "Would you like to try service cleanup and repair? (y/n): "
+                
+                if [ "$(utils_validate_yes_no "Try service cleanup?" "y")" = "y" ]; then
+                    fpm_cleanup_service "$version"
+                    utils_show_status "info" "Trying restart after cleanup..."
+                    brew services start "$service_name"
+                else
+                    echo -n "Would you like to try with sudo instead? (y/n): "
+                    if [ "$(utils_validate_yes_no "Try with sudo?" "y")" = "y" ]; then
+                        utils_show_status "info" "Trying with sudo..."
+                        local sudo_output=$(sudo brew services restart "$service_name" 2>&1)
+                        if echo "$sudo_output" | grep -q "Successfully"; then
+                            utils_show_status "success" "PHP-FPM service restarted successfully with sudo"
+                            utils_show_status "warning" "Running with sudo changes file ownership. You may need to run cleanup later."
+                        else
+                            utils_show_status "error" "Failed to restart service with sudo: $sudo_output"
+                            echo "You may need to restart manually with:"
+                            echo "sudo brew services restart $service_name"
+                        fi
                     fi
                 fi
             elif echo "$restart_output" | grep -q "already started"; then
@@ -84,7 +170,15 @@ function fpm_restart {
                 fi
             else
                 utils_show_status "error" "Unknown error restarting service"
-                echo "Manual restart may be required: brew services restart $service_name"
+                echo -n "Would you like to try service cleanup and repair? (y/n): "
+                
+                if [ "$(utils_validate_yes_no "Try service cleanup?" "y")" = "y" ]; then
+                    fpm_cleanup_service "$version"
+                    utils_show_status "info" "Trying restart after cleanup..."
+                    brew services start "$service_name"
+                else
+                    echo "Manual restart may be required: brew services restart $service_name"
+                fi
             fi
         fi
     else
@@ -99,11 +193,38 @@ function fpm_restart {
                 utils_show_status "success" "PHP-FPM service started successfully"
             else
                 utils_show_status "warning" "Failed to start service: $start_output"
-                echo -n "Would you like to try with sudo? (y/n): "
                 
-                if [ "$(utils_validate_yes_no "Try with sudo?" "y")" = "y" ]; then
-                    utils_show_status "info" "Trying with sudo..."
-                    sudo brew services start "$service_name"
+                # Check for bootstrap/IO error specifically
+                if echo "$start_output" | grep -q "Bootstrap failed: 5: Input/output error"; then
+                    utils_show_status "warning" "Detected bootstrap error. This usually indicates service configuration issues."
+                    echo -n "Would you like to try automatic service cleanup and repair? (y/n): "
+                    
+                    if [ "$(utils_validate_yes_no "Try service cleanup?" "y")" = "y" ]; then
+                        # Run cleanup and try again
+                        fpm_cleanup_service "$version"
+                        utils_show_status "info" "Trying restart after cleanup..."
+                        local retry_output=$(brew services start "$service_name" 2>&1)
+                        
+                        if echo "$retry_output" | grep -q "Successfully"; then
+                            utils_show_status "success" "PHP-FPM service started successfully after cleanup"
+                        else
+                            utils_show_status "error" "Failed to start service after cleanup: $retry_output"
+                            echo "Manual intervention may be required. Consider reinstalling PHP:"
+                            echo "brew reinstall $service_name"
+                        fi
+                    else
+                        echo -n "Would you like to try with sudo? (y/n): "
+                        if [ "$(utils_validate_yes_no "Try with sudo?" "y")" = "y" ]; then
+                            utils_show_status "info" "Trying with sudo..."
+                            sudo brew services start "$service_name"
+                        fi
+                    fi
+                else
+                    echo -n "Would you like to try with sudo? (y/n): "
+                    if [ "$(utils_validate_yes_no "Try with sudo?" "y")" = "y" ]; then
+                        utils_show_status "info" "Trying with sudo..."
+                        sudo brew services start "$service_name"
+                    fi
                 fi
             fi
         fi
@@ -115,6 +236,7 @@ function fpm_restart {
     else
         utils_show_status "warning" "PHP-FPM service for $service_name may not be running correctly"
         echo "Check status with: brew services list | grep php"
+        echo "If service is not running, consider skipping PHP-FPM (it's only needed for web server integration)"
     fi
     
     return 0
