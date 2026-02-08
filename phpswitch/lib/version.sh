@@ -6,16 +6,36 @@
 function version_resolve_php_version {
     local version="$1"
     
-    # Handle the case where php@8.4 is actually the default php
-    if [ "$version" = "php@8.4" ] && [ ! -d "$HOMEBREW_PREFIX/opt/php@8.4" ] && [ -d "$HOMEBREW_PREFIX/opt/php" ]; then
-        local default_version=$(php -v 2>/dev/null | head -n 1 | cut -d " " -f 2 | cut -d "." -f 1,2)
-        if [ "$default_version" = "8.4" ]; then
+    # If the version directory exists, use it directly
+    if [ -d "$HOMEBREW_PREFIX/opt/$version" ]; then
+        echo "$version"
+        return
+    fi
+    
+    # If it's php@default, return as is
+    if [ "$version" = "php@default" ]; then
+        echo "$version"
+        return
+    fi
+    
+    # Check if this version matches the default php version
+    # Only if the specific version folder doesn't exist (checked above)
+    if [ -d "$HOMEBREW_PREFIX/opt/php" ]; then
+        # Get default php version (e.g. 8.4)
+        local default_version_full=$(brew list --versions php | head -n 1)
+        local default_version_str=$(echo "$default_version_full" | awk '{print $2}')
+        local default_version=$(echo "$default_version_str" | cut -d. -f1,2)
+        
+        # Check if requested version matches default version (e.g. php@8.4 == 8.4)
+        local requested_num=$(echo "$version" | sed 's/php@//')
+        
+        if [ "$requested_num" = "$default_version" ]; then
             echo "php@default"
             return
         fi
     fi
     
-    # Return the original version
+    # Return the original version if no resolution found
     echo "$version"
 }
 

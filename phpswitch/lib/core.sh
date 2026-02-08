@@ -70,7 +70,28 @@ EOL
 # Function to get all installed PHP versions
 function core_get_installed_php_versions {
     # Get both php@X.Y versions and the default php (which could be the latest version)
-    { brew list | grep "^php@" || true; brew list | grep "^php$" | sed 's/php/php@default/g' || true; } | sort
+    local versions=$(brew list | grep "^php@" || true)
+    
+    # Check if the "php" formula is installed and get its version
+    if brew list | grep -q "^php$"; then
+        # Add php@default for internal logic
+        versions="$versions"$'\n'"php@default"
+        
+        # Resolve the actual version of the default php formula
+        # Use brew list --versions to get the version string (e.g., php 8.4.1)
+        local default_version_full=$(brew list --versions php | head -n 1)
+        local default_version=$(echo "$default_version_full" | awk '{print $2}')
+        
+        if [ -n "$default_version" ]; then
+            # Extract major.minor (e.g., 8.4)
+            local major_minor=$(echo "$default_version" | cut -d. -f1,2)
+            if [ -n "$major_minor" ]; then
+                versions="$versions"$'\n'"php@$major_minor"
+            fi
+        fi
+    fi
+    
+    echo "$versions" | sort | uniq
 }
 
 # Function to get and manage the cache directory with better error handling
