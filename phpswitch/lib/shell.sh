@@ -68,7 +68,7 @@ function shell_get_rc_file {
             ;;
         "fish")
             # For fish, use config.fish
-            fish_config_dir="$HOME/.config/fish"
+            local fish_config_dir="$HOME/.config/fish"
             rc_file="$fish_config_dir/config.fish"
             # Ensure the directory exists
             mkdir -p "$fish_config_dir"
@@ -93,8 +93,14 @@ function shell_get_rc_file {
 # Enhanced function to update shell configuration with better PATH manipulation
 function shell_update_rc {
     local new_version="$1"
-    local shell_type=$(shell_detect_shell)
-    local rc_file=$(shell_get_rc_file "$shell_type")
+    local shell_type
+    shell_type=$(shell_detect_shell)
+    local rc_file
+    rc_file=$(shell_get_rc_file "$shell_type")
+    if [ -z "$rc_file" ]; then
+        utils_show_status "error" "Could not determine shell RC file"
+        return 1
+    fi
     
     core_debug_log "Detected shell: $shell_type, RC file: $rc_file"
     
@@ -167,15 +173,12 @@ $begin_marker
 # Path configuration for PHP version: $new_version
 # Last updated: $(date)
 
-# Remove old PHP paths (if any)
-set --erase PATH
-fish_add_path $php_bin_path
-fish_add_path $php_sbin_path
-fish_add_path /usr/local/bin
-fish_add_path /usr/bin
-fish_add_path /bin
-fish_add_path /usr/sbin
-fish_add_path /sbin
+# Prepend PHP paths, filtering out stale PHP entries to avoid duplicates
+set -l _phpswitch_filtered
+for _p in \$PATH
+    string match -qv "*php*" -- \$_p; and set -a _phpswitch_filtered \$_p
+end
+set -gx PATH $php_bin_path $php_sbin_path \$_phpswitch_filtered
 
 # Refresh the command hash
 if type -q rehash
@@ -213,24 +216,19 @@ EOL
     
     # Check if our markers already exist in the file
     if grep -q "$begin_marker" "$rc_file"; then
-        # Replace existing block
-        awk -v begin="$begin_marker" -v end="$end_marker" '
-            !found && !between {print}
-            $0 ~ begin {found=1; between=1}
-            $0 ~ end {between=0}
-            END {if (found) print ""}
+        # Print everything before the begin marker
+        awk -v begin="$begin_marker" '
+            index($0, begin) > 0 {exit}
+            {print}
         ' "$rc_file" > "$temp_file"
-        
+
         # Append the new block
         append_path_code "$temp_file"
-        
-        # Add the rest of the file
-        awk -v begin="$begin_marker" -v end="$end_marker" '
-            between {next}
-            $0 ~ begin {between=1; next}
-            $0 ~ end {between=0; next}
-            !found && !between {next}
-            {print}
+
+        # Print everything after the end marker
+        awk -v end="$end_marker" '
+            past_end {print}
+            index($0, end) > 0 {past_end=1}
         ' "$rc_file" >> "$temp_file"
     else
         # No existing block - add to beginning of file
@@ -243,13 +241,13 @@ EOL
     # Move the temp file back to the original
     mv "$temp_file" "$rc_file"
     
-    # Make sure file is executable for login shells
-    chmod +x "$rc_file" 2>/dev/null || true
-    
     utils_show_status "success" "Updated PATH in $rc_file for $new_version"
     
-    # Create instructions file for sourcing
-    local instructions_file="/tmp/phpswitch_instructions_$(date +%s).sh"
+    # Create instructions file for sourcing.
+    # Use plain mktemp so the file persists after phpswitch exits (EXIT trap would delete it).
+    local instructions_file
+    instructions_file=$(mktemp)
+    chmod 600 "$instructions_file"
     
     if [ "$shell_type" = "fish" ]; then
         echo "source \"$rc_file\"" > "$instructions_file"
@@ -318,6 +316,7 @@ function shell_force_reload {
             return 1
         fi
         
+        local old_IFS="$IFS"
         IFS=:
         for path_component in $PATH; do
             # Validate each path component before processing
@@ -341,8 +340,8 @@ function shell_force_reload {
                 fi
             fi
         done
-        unset IFS
-        
+        IFS="$old_IFS"
+
         # Set the new PATH with PHP paths first
         export PATH="$php_bin_path:$php_sbin_path:$system_paths"
         
@@ -371,11 +370,24 @@ function shell_cleanup_backups {
     local file_prefix="$1"
     local max_backups="${MAX_BACKUPS:-5}"
     
-    # List backup files sorted by modification time (oldest first)
-    for old_backup in $(ls -t "${file_prefix}.bak."* 2>/dev/null | tail -n +$((max_backups+1))); do
-        core_debug_log "Removing old backup: $old_backup"
-        rm -f "$old_backup"
+    # Collect backups via glob into array (safe: no word-splitting)
+    local -a backup_files=()
+    local f
+    for f in "${file_prefix}.bak."*; do
+        [ -e "$f" ] && backup_files+=("$f")
     done
+    local count=${#backup_files[@]}
+    if [ "$count" -gt "$max_backups" ]; then
+        local to_delete=$(( count - max_backups ))
+        # Sort by mtime ascending (oldest first), remove the excess
+        while IFS= read -r old_backup; do
+            [ -f "$old_backup" ] || continue
+            core_debug_log "Removing old backup: $old_backup"
+            rm -f "$old_backup"
+            (( to_delete-- ))
+            [ "$to_delete" -le 0 ] && break
+        done < <(stat -f '%m %N' "${backup_files[@]}" 2>/dev/null | sort -n | awk '{print $2}')
+    fi
 }
 
 # Function to create a direct executable script that can be sourced to reload PHP
@@ -393,8 +405,12 @@ function shell_create_reload_script {
         php_sbin_path="$HOMEBREW_PREFIX/opt/$version/sbin"
     fi
     
-    # Create a temporary script that can be sourced to reload the PATH
-    local reload_script="/tmp/phpswitch_reload_$(date +%s).sh"
+    # Create a temporary script that can be sourced to reload the PATH.
+    # Use plain mktemp (not utils_create_secure_temp_file) so the file is NOT
+    # tracked for cleanup on EXIT — the user needs it to persist after phpswitch exits.
+    local reload_script
+    reload_script=$(mktemp)
+    chmod 600 "$reload_script"
     
     if [ "$shell_type" = "fish" ]; then
         cat > "$reload_script" << EOL
@@ -404,19 +420,12 @@ function shell_create_reload_script {
 
 echo "Reloading PATH with PHP $version..."
 
-# Clear the PATH to remove any existing PHP paths
-set --erase PATH
-
-# Add new PHP paths first to ensure they take precedence
-fish_add_path $php_bin_path
-fish_add_path $php_sbin_path
-
-# Add system paths back
-fish_add_path /usr/local/bin
-fish_add_path /usr/bin
-fish_add_path /bin
-fish_add_path /usr/sbin
-fish_add_path /sbin
+# Prepend PHP paths, filtering out stale PHP entries to avoid duplicates
+set -l _phpswitch_filtered
+for _p in \$PATH
+    string match -qv "*php*" -- \$_p; and set -a _phpswitch_filtered \$_p
+end
+set -gx PATH $php_bin_path $php_sbin_path \$_phpswitch_filtered
 
 # Refresh command hash
 if type -q rehash

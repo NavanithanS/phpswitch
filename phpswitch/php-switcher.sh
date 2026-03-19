@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Version: 1.4.1
+# Version: 1.4.5
 # PHPSwitch - PHP Version Manager for macOS
 # This script helps switch between different PHP versions installed via Homebrew
 # and updates shell configuration files (.zshrc, .bashrc, etc.) accordingly
@@ -9,6 +9,8 @@
 # PHPSwitch Default Configuration
 # Contains default values for configuration
 
+PHPSWITCH_VERSION="1.4.5"
+
 # Default configuration values
 DEFAULT_AUTO_RESTART_PHP_FPM=true
 DEFAULT_BACKUP_CONFIG_FILES=true
@@ -16,6 +18,7 @@ DEFAULT_PHP_VERSION=""
 DEFAULT_MAX_BACKUPS=5
 DEFAULT_AUTO_SWITCH_PHP_VERSION=false
 DEFAULT_CACHE_DIRECTORY=""  # Empty means use default location in ~/.cache/phpswitch
+
 # Module: core.sh
 # PHPSwitch Core Functions
 # Contains essential variables and core functionality
@@ -52,6 +55,21 @@ function core_load_config {
     else
         core_debug_log "No configuration file found at $CONFIG_FILE"
     fi
+    
+    # Validate Homebrew prefix for security
+    if [[ -z "$HOMEBREW_PREFIX" ]]; then
+        echo "Error: Could not determine Homebrew prefix" >&2
+        exit 1
+    fi
+    
+    # Basic validation for Homebrew prefix (more permissive than utils_validate_path)
+    if [[ "$HOMEBREW_PREFIX" != /* ]] || [[ "$HOMEBREW_PREFIX" == *".."* ]] || [[ ${#HOMEBREW_PREFIX} -gt 4096 ]]; then
+        echo "Error: Invalid Homebrew prefix path: $HOMEBREW_PREFIX" >&2
+        exit 1
+    fi
+    
+    # Setup automatic cleanup for temporary files
+    utils_setup_temp_cleanup_trap
 }
 
 # Create default configuration
@@ -73,7 +91,26 @@ EOL
 # Function to get all installed PHP versions
 function core_get_installed_php_versions {
     # Get both php@X.Y versions and the default php (which could be the latest version)
-    { brew list | grep "^php@" || true; brew list | grep "^php$" | sed 's/php/php@default/g' || true; } | sort
+    local brew_list
+    brew_list=$(brew list 2>/dev/null)
+    local versions
+    versions=$(echo "$brew_list" | grep "^php@" || true)
+
+    # Check if the "php" formula is installed and get its version
+    if echo "$brew_list" | grep -q "^php$"; then
+        # Add php@default for internal logic
+        versions="$versions"$'\n'"php@default"
+        
+        # Resolve the actual version of the default php formula
+        # Use brew list --versions to get the version string (e.g., php 8.4.1)
+        local major_minor
+        major_minor=$(brew list --versions php 2>/dev/null | awk 'NR==1{split($2,a,"."); print a[1] "." a[2]}')
+        if [ -n "$major_minor" ]; then
+            versions="$versions"$'\n'"php@$major_minor"
+        fi
+    fi
+    
+    echo "$versions" | sort | uniq
 }
 
 # Function to get and manage the cache directory with better error handling
@@ -126,12 +163,7 @@ function core_get_cache_dir {
                 
                 # Save this location to config for future use
                 if [ -f "$HOME/.phpswitch.conf" ]; then
-                    if grep -q "CACHE_DIRECTORY=" "$HOME/.phpswitch.conf"; then
-                        sed -i.bak "s|CACHE_DIRECTORY=.*|CACHE_DIRECTORY=\"$alt_cache\"|g" "$HOME/.phpswitch.conf"
-                        rm -f "$HOME/.phpswitch.conf.bak" 2>/dev/null
-                    else
-                        echo "CACHE_DIRECTORY=\"$alt_cache\"" >> "$HOME/.phpswitch.conf"
-                    fi
+                    utils_set_config_value "CACHE_DIRECTORY" "$alt_cache" "$HOME/.phpswitch.conf"
                 else
                     # Create config file if it doesn't exist
                     core_create_default_config
@@ -212,7 +244,8 @@ function core_get_available_php_versions {
     }
     
     # Create a temporary file for the new cache
-    local temp_cache_file=$(mktemp)
+    local temp_cache_file
+    temp_cache_file=$(utils_create_secure_temp_file)
     
     # Try to get actual versions with a timeout
     (
@@ -220,28 +253,29 @@ function core_get_available_php_versions {
         core_debug_log "Searching for PHP versions with Homebrew..."
         {
             # Use temp files for output
-            local search_file1=$(mktemp)
-            local search_file2=$(mktemp)
+            local search_file1 search_file2
+            search_file1=$(utils_create_secure_temp_file)
+            search_file2=$(utils_create_secure_temp_file)
             
-            # Run searches in background
-            brew search /php@[0-9]/ 2>/dev/null | grep '^php@' > "$search_file1" & 
-            brew search /^php$/ 2>/dev/null | grep '^php$' | sed 's/php/php@default/g' > "$search_file2" &
-            brew_pid=$!
-            
+            # Run searches in background, track both PIDs
+            brew search /php@[0-9]/ 2>/dev/null | grep '^php@' > "$search_file1" &
+            local brew_pid1=$!
+            brew search /^php$/ 2>/dev/null | sed 's/^php$/php@default/' > "$search_file2" &
+            local brew_pid2=$!
+
             # Wait for up to 10 seconds
             for i in {1..10}; do
-                if ! kill -0 $brew_pid 2>/dev/null; then
-                    # Command completed
+                if ! kill -0 $brew_pid1 2>/dev/null && ! kill -0 $brew_pid2 2>/dev/null; then
                     core_debug_log "Homebrew search completed in $i seconds"
                     break
                 fi
                 sleep 1
             done
-            
-            # Kill if still running
-            if kill -0 $brew_pid 2>/dev/null; then
-                kill $brew_pid 2>/dev/null
-                wait $brew_pid 2>/dev/null || true
+
+            # Kill both if still running
+            if kill -0 $brew_pid1 2>/dev/null || kill -0 $brew_pid2 2>/dev/null; then
+                kill $brew_pid1 $brew_pid2 2>/dev/null
+                wait $brew_pid1 $brew_pid2 2>/dev/null || true
                 core_debug_log "Brew search took too long, using fallback values"
                 core_fallback_php_versions > "$temp_cache_file"
             else
@@ -275,17 +309,19 @@ function core_get_available_php_versions {
     # Show a brief spinner while we wait
     local spinner_pid=$!
     local spin='-\|/'
+    local spin_length=${#spin}
     local i=0
     
-    echo -n "Searching for available PHP versions..."
-    
+    printf "  Searching for available PHP versions..."
+
     while kill -0 $spinner_pid 2>/dev/null; do
         i=$(( (i+1) % 4 ))
-        printf "\rSearching for available PHP versions... ${spin:$i:1}"
+        local current_char="${spin:$i:1}"
+        printf "\r  Searching for available PHP versions... %s" "$current_char"
         sleep 0.1
     done
-    
-    printf "\rSearching for available PHP versions... Done!     \n"
+
+    printf "\r  Searching for available PHP versions...          \n"
     
     # Wait for the background process
     wait
@@ -340,7 +376,7 @@ function core_get_active_php_version {
     core_debug_log "PHP binary: $which_php"
     
     if [ -n "$which_php" ]; then
-        php_version=$($which_php -v 2>/dev/null | head -n 1 | cut -d " " -f 2)
+        php_version=$("$which_php" -v 2>/dev/null | head -n 1 | cut -d " " -f 2)
         core_debug_log "PHP version: $php_version"
         echo "$php_version"
     else
@@ -351,14 +387,16 @@ function core_get_active_php_version {
 # Function to check for conflicting PHP installations
 function core_check_php_conflicts {
     # Find all PHP binaries in the PATH
+    local old_IFS="$IFS"
     IFS=:
     for dir in $PATH; do
         if [ -x "$dir/php" ]; then
-            echo "Found PHP binary at: $dir/php"
-            "$dir/php" -v | head -n 1
+            local php_ver
+            php_ver=$("$dir/php" -v 2>/dev/null | head -n 1 | cut -d' ' -f2)
+            printf "  Found PHP binary at: %s/php  (%s)\n" "$dir" "$php_ver"
         fi
     done
-    unset IFS
+    IFS="$old_IFS"
 }
 
 # Function to check if PHP version is actually installed
@@ -393,6 +431,7 @@ function core_clear_cache {
         utils_show_status "warning" "No cache directory found at $cache_dir"
     fi
 }
+
 # Module: utils.sh
 # PHPSwitch Utility Functions
 # Contains display and validation utilities
@@ -405,69 +444,202 @@ if [ -t 1 ]; then
     fi
 fi
 
-# Function to display a spinning animation for long-running processes
-function utils_show_spinner {
-    local message="$1"
-    local pid=$!
-    local spin='-\|/'
-    local i=0
+# Security: Path validation functions
+function utils_validate_path {
+    local path="$1"
+    local allow_relative="${2:-false}"
     
-    echo -n "$message "
+    # Check for empty path
+    if [[ -z "$path" ]]; then
+        return 1
+    fi
     
-    while kill -0 $pid 2>/dev/null; do
-        i=$(( (i+1) % 4 ))
-        printf "\r$message ${spin:$i:1}"
-        sleep 0.1
-    done
+    # Check for path traversal attempts
+    if [[ "$path" == *".."* ]]; then
+        core_debug_log "Path validation failed: path traversal detected in '$path'"
+        return 1
+    fi
     
-    printf "\r$message Done!   \n"
+    # Check for null bytes using a more robust method
+    # Use test with -z and command substitution to detect null bytes
+    if [ -n "$(printf '%s' "$path" | tr -d '[:print:][:space:]')" ]; then
+        core_debug_log "Path validation failed: non-printable characters detected in '$path'"
+        return 1
+    fi
+    
+    # If relative paths are not allowed, ensure it's absolute
+    if [[ "$allow_relative" != "true" ]] && [[ "$path" != /* ]]; then
+        core_debug_log "Path validation failed: relative path not allowed '$path'"
+        return 1
+    fi
+    
+    # Check path length (prevent extremely long paths)
+    if [[ ${#path} -gt 4096 ]]; then
+        core_debug_log "Path validation failed: path too long '$path'"
+        return 1
+    fi
+    
+    # Check for potentially dangerous characters
+    if [[ "$path" =~ [[:cntrl:]] ]]; then
+        core_debug_log "Path validation failed: control characters detected in '$path'"
+        return 1
+    fi
+    
+    return 0
 }
 
-# Alternative function with dots animation for progress indication
-function utils_show_progress {
-    local message="$1"
-    local pid=$!
-    local dots=""
+# Security: Validate PHP version string
+function utils_validate_version {
+    local version="$1"
     
-    echo -n "$message"
+    # Check for empty version
+    if [[ -z "$version" ]]; then
+        return 1
+    fi
     
-    while kill -0 $pid 2>/dev/null; do
-        dots="${dots}."
-        if [ ${#dots} -gt 5 ]; then
-            dots="."
+    # Allow standard PHP version patterns: php@8.1, 8.1, php, etc.
+    if [[ "$version" =~ ^(php(@[0-9]+\.[0-9]+)?|[0-9]+\.[0-9]+|default)$ ]]; then
+        return 0
+    fi
+    
+    core_debug_log "Version validation failed: invalid version format '$version'"
+    return 1
+}
+
+# Security: Validate username string
+function utils_validate_username {
+    local username="$1"
+    
+    # Check for empty username
+    if [[ -z "$username" ]]; then
+        return 1
+    fi
+    
+    # Allow only alphanumeric characters, underscores, and hyphens
+    if [[ "$username" =~ ^[a-zA-Z0-9_-]+$ ]] && [[ ${#username} -le 32 ]]; then
+        return 0
+    fi
+    
+    core_debug_log "Username validation failed: invalid username '$username'"
+    return 1
+}
+
+# Security: Array to track temporary files for cleanup
+declare -a TEMP_FILES_TO_CLEANUP=()
+declare -a TEMP_DIRS_TO_CLEANUP=()
+
+# Security: Create secure temporary file with automatic cleanup
+function utils_create_secure_temp_file {
+    local temp_file
+    temp_file=$(mktemp)
+    
+    if [[ -n "$temp_file" ]] && [[ -f "$temp_file" ]]; then
+        # Set secure permissions (readable/writable by owner only)
+        chmod 600 "$temp_file"
+        
+        # Track for cleanup
+        TEMP_FILES_TO_CLEANUP+=("$temp_file")
+        
+        echo "$temp_file"
+        return 0
+    else
+        core_debug_log "Failed to create secure temporary file"
+        return 1
+    fi
+}
+
+# Security: Create secure temporary directory with automatic cleanup
+function utils_create_secure_temp_dir {
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    
+    if [[ -n "$temp_dir" ]] && [[ -d "$temp_dir" ]]; then
+        # Set secure permissions (accessible by owner only)
+        chmod 700 "$temp_dir"
+        
+        # Track for cleanup
+        TEMP_DIRS_TO_CLEANUP+=("$temp_dir")
+        
+        echo "$temp_dir"
+        return 0
+    else
+        core_debug_log "Failed to create secure temporary directory"
+        return 1
+    fi
+}
+
+# Security: Cleanup all tracked temporary files and directories
+function utils_cleanup_temp_files {
+    local item
+    
+    # Clean up temporary files
+    for item in "${TEMP_FILES_TO_CLEANUP[@]}"; do
+        if [[ -f "$item" ]]; then
+            rm -f "$item" 2>/dev/null
+            core_debug_log "Cleaned up temporary file: $item"
         fi
-        printf "\r$message%-6s" "$dots"
-        sleep 0.3
     done
     
-    printf "\r$message Done!      \n"
+    # Clean up temporary directories
+    for item in "${TEMP_DIRS_TO_CLEANUP[@]}"; do
+        if [[ -d "$item" ]]; then
+            rm -rf "$item" 2>/dev/null
+            core_debug_log "Cleaned up temporary directory: $item"
+        fi
+    done
+    
+    # Clear the arrays
+    TEMP_FILES_TO_CLEANUP=()
+    TEMP_DIRS_TO_CLEANUP=()
+}
+
+# Security: Setup trap for automatic cleanup
+function utils_setup_temp_cleanup_trap {
+    trap 'utils_cleanup_temp_files; exit' INT TERM EXIT
+}
+
+# Function to print text with a smooth left-to-right RGB gradient
+# Usage: utils_print_gradient "text" r1 g1 b1 r2 g2 b2
+function utils_print_gradient {
+    local text="$1"
+    local r1=$2 g1=$3 b1=$4
+    local r2=$5 g2=$6 b2=$7
+    local len=${#text}
+    if [ "$len" -le 1 ]; then
+        printf "\033[38;2;%d;%d;%dm%s\033[0m" "$r1" "$g1" "$b1" "$text"
+        return
+    fi
+    local i=0
+    while [ $i -lt $len ]; do
+        local char="${text:$i:1}"
+        local r=$(( r1 + (r2 - r1) * i / (len - 1) ))
+        local g=$(( g1 + (g2 - g1) * i / (len - 1) ))
+        local b=$(( b1 + (b2 - b1) * i / (len - 1) ))
+        printf "\033[38;2;%d;%d;%dm%s" "$r" "$g" "$b" "$char"
+        i=$(( i + 1 ))
+    done
+    printf "\033[0m"
 }
 
 # Function to display success or error message with colors
 function utils_show_status {
     local status="$1"
     local message="$2"
-    
+
     if [ "$USE_COLORS" = "true" ]; then
-        if [ "$status" = "success" ]; then
-            echo -e "\033[32m✅ SUCCESS: $message\033[0m"
-        elif [ "$status" = "warning" ]; then
-            echo -e "\033[33m⚠️  WARNING: $message\033[0m"
-        elif [ "$status" = "error" ]; then
-            echo -e "\033[31m❌ ERROR: $message\033[0m"
-        elif [ "$status" = "info" ]; then
-            echo -e "\033[36mℹ️  INFO: $message\033[0m"
-        fi
+        case "$status" in
+            success) printf "     \xe2\x8e\xbf  %s\n" "$message" ;;
+            warning) printf "     \xe2\x8e\xbf  %s\n" "$message" ;;
+            error)   printf "     \xe2\x8e\xbf  %s\n" "$message" ;;
+            info)    printf "\033[2m  \xe2\x8f\xba\033[0m  %s\n" "$message" ;;
+        esac
     else
-        if [ "$status" = "success" ]; then
-            echo "SUCCESS: $message"
-        elif [ "$status" = "warning" ]; then
-            echo "WARNING: $message"
-        elif [ "$status" = "error" ]; then
-            echo "ERROR: $message"
-        elif [ "$status" = "info" ]; then
-            echo "INFO: $message"
-        fi
+        case "$status" in
+            success) echo "     L $message" ;;
+            warning) echo "     L warn: $message" ;;
+            error)   echo "     L error: $message" ;;
+            info)    echo "  * $message" ;;
+        esac
     fi
 }
 
@@ -493,9 +665,22 @@ function utils_validate_yes_no {
             echo "n"
             return 0
         else
-            echo -n "Please enter 'y' or 'n': "
+            printf "  Enter 'y' or 'n' "
         fi
     done
+}
+
+# Safely set a KEY="value" pair in a config file (injection-safe via ENVIRON)
+function utils_set_config_value {
+    local key="$1"
+    local value="$2"
+    local file="$3"
+    KEY="$key" VALUE="$value" awk '
+        BEGIN { k=ENVIRON["KEY"]; v=ENVIRON["VALUE"]; found=0 }
+        $0 ~ ("^" k "=") { print k "=\"" v "\""; found=1; next }
+        { print }
+        END { if (!found) print k "=\"" v "\"" }
+    ' "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
 }
 
 # Function to validate numeric input within a range
@@ -513,117 +698,177 @@ function utils_validate_numeric_input {
 
 # Function to help diagnose PATH issues
 function utils_diagnose_path_issues {
-    echo "PATH Diagnostic"
-    echo "==============="
-    
-    echo "Current PATH:"
-    echo "$PATH" | tr ':' '\n' | nl
-    
-    echo ""
-    echo "PHP binaries in PATH:"
-    
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "PATH Diagnostic" 192 132 252 103 232 249; printf "\n\n"
+    else
+        printf "\n  PATH Diagnostic\n\n"
+    fi
+
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "  "; utils_print_gradient "Current PATH:" 148 182 251 125 207 250; printf "\n"
+    else
+        printf "  Current PATH:\n"
+    fi
+    printf "%s" "$PATH" | tr ':' '\n' | nl | sed 's/^/  /'
+
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "PHP binaries in PATH:" 148 182 251 125 207 250; printf "\n"
+    else
+        printf "\n  PHP binaries in PATH:\n"
+    fi
+
     local count=0
+    local old_IFS="$IFS"
     IFS=:
     for dir in $PATH; do
         if [ -x "$dir/php" ]; then
             count=$((count + 1))
-            echo "$count) $dir/php"
-            echo "   Version: $($dir/php -v 2>/dev/null | head -n 1)"
-            echo "   Type: $(if [ -L "$dir/php" ]; then echo "Symlink → $(readlink "$dir/php")"; else echo "Direct binary"; fi)"
-            echo ""
+            local _ver _type
+            _ver=$("$dir/php" -v 2>/dev/null | head -n 1)
+            if [ -L "$dir/php" ]; then
+                _type="Symlink → $(readlink "$dir/php")"
+            else
+                _type="Direct binary"
+            fi
+            printf "  %d) %s/php\n" "$count" "$dir"
+            printf "     Version: %s\n" "${_ver:-could not determine}"
+            printf "     Type: %s\n\n" "$_type"
         fi
     done
-    unset IFS
-    
+    IFS="$old_IFS"
+
     if [ "$count" -eq 0 ]; then
         utils_show_status "warning" "No PHP binaries found in PATH"
     elif [ "$count" -gt 1 ]; then
         utils_show_status "warning" "Multiple PHP binaries found in PATH. This may cause confusion."
-        echo "The first one in the PATH will be used."
+        printf "  The first one in the PATH will be used.\n"
     fi
     
-    echo ""
-    echo "Active PHP:"
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "Active PHP:" 148 182 251 125 207 250; printf "\n"
+    else
+        printf "\n  Active PHP:\n"
+    fi
     which php
     php -v | head -n 1
-    
-    echo ""
-    echo "Expected PHP path for current version:"
-    local current_version=$(core_get_current_php_version)
-    if [ "$current_version" = "php@default" ]; then
-        echo "$HOMEBREW_PREFIX/opt/php/bin/php"
+
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "Expected PHP path for current version:" 148 182 251 125 207 250; printf "\n"
     else
-        echo "$HOMEBREW_PREFIX/opt/$current_version/bin/php"
+        printf "\n  Expected PHP path for current version:\n"
+    fi
+    local current_version
+    current_version=$(core_get_current_php_version)
+    if [ "$current_version" = "php@default" ]; then
+        printf "  %s/opt/php/bin/php\n" "$HOMEBREW_PREFIX"
+    else
+        printf "  %s/opt/%s/bin/php\n" "$HOMEBREW_PREFIX" "$current_version"
     fi
     
-    echo ""
-    echo "Recommended actions:"
-    echo "1. Ensure the PHP version you want is first in your PATH"
-    echo "2. Check for conflicting PHP binaries in your PATH"
-    echo "3. Run 'hash -r' (bash/zsh) or 'rehash' (fish) to clear command hash table"
-    echo "4. Open a new terminal session to ensure PATH changes take effect"
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "Recommended actions:" 148 182 251 125 207 250; printf "\n"
+    else
+        printf "\n  Recommended actions:\n"
+    fi
+    printf "    1  Ensure the PHP version you want is first in your PATH\n"
+    printf "    2  Check for conflicting PHP binaries in your PATH\n"
+    printf "    3  Run 'hash -r' (bash/zsh) or 'rehash' (fish) to clear command hash table\n"
+    printf "    4  Open a new terminal session to ensure PATH changes take effect\n"
 }
 
 # Function to diagnose the PHP environment
 function utils_diagnose_php_environment {
-    echo "PHP Environment Diagnostic"
-    echo "=========================="
-    
-    # 1. Check all PHP binaries
-    echo "PHP Binaries:"
-    echo "-------------"
-    if command -v php &>/dev/null; then
-        php_path=$(which php)
-        echo "Default PHP: $php_path"
-        if [ -L "$php_path" ]; then
-            real_path=$(readlink "$php_path")
-            echo "  → Symlinked to: $real_path"
-        fi
-        echo "  Version: $(php -v | head -n 1)"
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "PHP Environment Diagnostic" 192 132 252 103 232 249; printf "\n\n"
     else
-        echo "No PHP binary found in PATH"
+        printf "\n  PHP Environment Diagnostic\n\n"
     fi
-    echo ""
-    
+
+    # 1. Check all PHP binaries
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "  "; utils_print_gradient "PHP Binaries" 148 182 251 125 207 250; printf "\n"
+    else
+        printf "  PHP Binaries\n"
+    fi
+    if command -v php &>/dev/null; then
+        local php_path
+        php_path=$(which php)
+        printf "  Default PHP: %s\n" "$php_path"
+        if [ -L "$php_path" ]; then
+            local real_path
+            real_path=$(readlink "$php_path")
+            printf "    → Symlinked to: %s\n" "$real_path"
+        fi
+        printf "  Version: %s\n" "$(php -v | head -n 1)"
+    else
+        printf "  No PHP binary found in PATH\n"
+    fi
+    printf "\n"
+
     # 2. Check all installed PHP versions
-    echo "Installed PHP Versions:"
-    echo "----------------------"
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "Installed PHP Versions" 148 182 251 125 207 250; printf "\n"
+    else
+        printf "\n  Installed PHP Versions\n"
+    fi
+    local installed_versions
     installed_versions=$(core_get_installed_php_versions)
     if [ -n "$installed_versions" ]; then
-        echo "$installed_versions"
+        printf "%s\n" "$installed_versions"
     else
-        echo "No PHP versions installed via Homebrew"
+        printf "  No PHP versions installed via Homebrew\n"
     fi
-    echo ""
-    
+    printf "\n"
+
     # 3. Check Homebrew PHP links
-    echo "Homebrew PHP Links:"
-    echo "------------------"
-    if [ -d "$HOMEBREW_PREFIX/opt" ]; then
-        ls -la "$HOMEBREW_PREFIX/opt" | grep "php"
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "Homebrew PHP Links" 148 182 251 125 207 250; printf "\n"
     else
-        echo "No Homebrew opt directory found"
+        printf "\n  Homebrew PHP Links\n"
     fi
-    echo ""
-    
+    if [ -d "$HOMEBREW_PREFIX/opt" ]; then
+        find "$HOMEBREW_PREFIX/opt" -maxdepth 1 -name '*php*' | sort | while IFS= read -r p; do
+            printf "  %s\n" "$p"
+        done
+    else
+        printf "  No Homebrew opt directory found\n"
+    fi
+    printf "\n"
+
     # 4. Check for conflicting PHP binaries
-    echo "PHP in PATH:"
-    echo "-----------"
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "PHP in PATH" 148 182 251 125 207 250; printf "\n"
+    else
+        printf "\n  PHP in PATH\n"
+    fi
+    local old_IFS="$IFS"
     IFS=:
     for dir in $PATH; do
         if [ -x "$dir/php" ]; then
-            echo "Found in: $dir/php"
-            echo "  Version: $($dir/php -v 2>/dev/null | head -n 1 || echo "Could not determine version")"
-            echo "  Type: $(if [ -L "$dir/php" ]; then echo "Symlink → $(readlink "$dir/php")"; else echo "Direct binary"; fi)"
+            local _ver _type
+            _ver=$("$dir/php" -v 2>/dev/null | head -n 1)
+            if [ -L "$dir/php" ]; then
+                _type="Symlink → $(readlink "$dir/php")"
+            else
+                _type="Direct binary"
+            fi
+            printf "  Found in: %s/php\n" "$dir"
+            printf "    Version: %s\n" "${_ver:-could not determine}"
+            printf "    Type: %s\n" "$_type"
         fi
     done
-    unset IFS
-    echo ""
-    
+    IFS="$old_IFS"
+    printf "\n"
+
     # 5. Check shell config files for PHP path entries
-    echo "Shell Configuration Files:"
-    echo "-------------------------"
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "Shell Configuration Files" 148 182 251 125 207 250; printf "\n"
+    else
+        printf "\n  Shell Configuration Files\n"
+    fi
+    local shell_type
     shell_type=$(shell_detect_shell)
+    local -a config_files
     if [ "$shell_type" = "zsh" ]; then
         config_files=("$HOME/.zshrc" "$HOME/.zprofile")
     elif [ "$shell_type" = "bash" ]; then
@@ -633,18 +878,21 @@ function utils_diagnose_php_environment {
     else
         config_files=("$HOME/.profile")
     fi
-    
+
     for file in "${config_files[@]}"; do
         if [ -f "$file" ]; then
-            echo "Checking $file:"
-            grep -n "PATH.*php" "$file" || echo "  No PHP PATH entries found"
+            printf "  %s\n" "$file"
+            grep -n "PATH.*php" "$file" | sed 's/^/    /' || printf "    No PHP PATH entries found\n"
         fi
     done
-    echo ""
+    printf "\n"
     
     # 6. Check PHP modules
-    echo "Loaded PHP Modules:"
-    echo "------------------"
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "Loaded PHP Modules" 148 182 251 125 207 250; printf "\n"
+    else
+        printf "\n  Loaded PHP Modules\n"
+    fi
     if command -v php &>/dev/null; then
         php -m | grep -v "\[" | sort | head -n 20
         module_count=$(php -m | grep -v "\[" | wc -l)
@@ -657,19 +905,27 @@ function utils_diagnose_php_environment {
     
     
     # 7. Check running PHP-FPM services
-    echo "Running PHP-FPM Services:"
-    echo "-------------------------"
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "Running PHP-FPM Services" 148 182 251 125 207 250; printf "\n"
+    else
+        printf "\n  Running PHP-FPM Services\n"
+    fi
     brew services list | grep -E "^php(@[0-9]\.[0-9])?" || echo "  No PHP services found"
     echo ""
     
     # 8. Summary and recommendations
-    echo "Diagnostic Summary:"
-    echo "------------------"
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "Summary" 148 182 251 125 207 250; printf "\n"
+    else
+        printf "\n  Summary\n"
+    fi
     if command -v php &>/dev/null; then
         php_version=$(php -v | head -n 1 | cut -d " " -f 2)
         homebrew_linked=$(core_get_current_php_version)
         
-        if [[ $homebrew_linked == php@* ]] && [[ $php_version != *$(echo "$homebrew_linked" | grep -o "[0-9]\.[0-9]")* ]]; then
+        local brew_major_minor
+        brew_major_minor=$(echo "$homebrew_linked" | grep -oE "[0-9]+\.[0-9]+")
+        if [[ "$homebrew_linked" == php@* ]] && [[ "$php_version" != *"$brew_major_minor"* ]]; then
             utils_show_status "warning" "Version mismatch detected"
             echo "  The PHP version in use ($php_version) does not match the Homebrew-linked version ($homebrew_linked)"
             echo ""
@@ -795,12 +1051,7 @@ function utils_check_dependencies {
             if [ -d "$alt_cache" ] && [ -w "$alt_cache" ]; then
                 # Update config file for future runs
                 if [ -f "$HOME/.phpswitch.conf" ]; then
-                    if grep -q "CACHE_DIRECTORY=" "$HOME/.phpswitch.conf"; then
-                        sed -i.bak "s|CACHE_DIRECTORY=.*|CACHE_DIRECTORY=\"$alt_cache\"|g" "$HOME/.phpswitch.conf"
-                        rm -f "$HOME/.phpswitch.conf.bak" 2>/dev/null
-                    else
-                        echo "CACHE_DIRECTORY=\"$alt_cache\"" >> "$HOME/.phpswitch.conf"
-                    fi
+                    utils_set_config_value "CACHE_DIRECTORY" "$alt_cache" "$HOME/.phpswitch.conf"
                 else
                     # Create config file if it doesn't exist
                     cat > "$HOME/.phpswitch.conf" << EOL
@@ -818,9 +1069,9 @@ EOL
     # If we're using the standard cache directory but it's not writable
     elif [ "$cache_dir" = "$HOME/.cache/phpswitch" ] && [ ! -w "$cache_dir" ]; then
         utils_show_status "warning" "Cache directory is not writable: $cache_dir"
-        echo "This is a non-critical issue. PHPSwitch will use temporary directories instead."
-        echo -n "Would you like to fix the permissions now? (y/n): "
-        if [ "$(utils_validate_yes_no "Fix permissions?" "y")" = "y" ]; then
+        printf "  This is a non-critical issue. PHPSwitch will use temporary directories instead.\n"
+        printf "  Fix the permissions now? (y/n) "
+        if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
             # Check if we have the fix-permissions script
             local script_dir="$(dirname "$(realpath "$0" 2>/dev/null || echo "$0")")"
             local fix_script="$script_dir/tools/fix-permissions.sh"
@@ -841,7 +1092,14 @@ EOL
                     
                     if [ ! -w "$cache_dir" ]; then
                         # Try ownership change
-                        sudo chown "$(whoami)" "$cache_dir" 2>/dev/null
+                        # Get secure username and validate it
+                        local username
+                        username="$(id -un)"
+                        if utils_validate_username "$username"; then
+                            sudo chown "$username" "$cache_dir" 2>/dev/null
+                        else
+                            utils_show_status "error" "Invalid username detected, skipping ownership change"
+                        fi
                         
                         if [ ! -w "$cache_dir" ]; then
                             utils_show_status "error" "Could not fix permissions with standard methods"
@@ -861,12 +1119,7 @@ EOL
                                     
                                     # Update config file
                                     if [ -f "$HOME/.phpswitch.conf" ]; then
-                                        if grep -q "CACHE_DIRECTORY=" "$HOME/.phpswitch.conf"; then
-                                            sed -i.bak "s|CACHE_DIRECTORY=.*|CACHE_DIRECTORY=\"$alt_cache\"|g" "$HOME/.phpswitch.conf"
-                                            rm -f "$HOME/.phpswitch.conf.bak" 2>/dev/null
-                                        else
-                                            echo "CACHE_DIRECTORY=\"$alt_cache\"" >> "$HOME/.phpswitch.conf"
-                                        fi
+                                        utils_set_config_value "CACHE_DIRECTORY" "$alt_cache" "$HOME/.phpswitch.conf"
                                     else
                                         # Create config file if it doesn't exist
                                         cat > "$HOME/.phpswitch.conf" << EOL
@@ -933,12 +1186,72 @@ function utils_compare_versions {
         return 1
     fi
 }
+
+# Function to read PHP version from composer.json
+# Uses grep/sed to avoid jq dependency
+function utils_read_composer_version {
+    local composer_file="$1"
+    
+    if [ ! -f "$composer_file" ]; then
+        return 1
+    fi
+    
+    # 1. Check config.platform.php (highest priority)
+    # We look for "php": "X.Y" inside the file, hoping it's unique enough or we catch the right one.
+    # To be safer without jq, we can try to look for the platform block
+    local platform_php=$(grep -A 10 '"platform"' "$composer_file" 2>/dev/null | grep '"php"' | head -n 1)
+    
+    if [ -n "$platform_php" ]; then
+        # Extract version: "php": "8.1.0" -> 8.1.0
+        local version=$(echo "$platform_php" | sed -E 's/.*"php": *"([^"]+)".*/\1/')
+        # extract major.minor
+        echo "$version" | grep -oE '[0-9]+\.[0-9]+' | head -n 1
+        return 0
+    fi
+    
+    # 2. Check require.php
+    local require_php=$(grep -A 20 '"require"' "$composer_file" 2>/dev/null | grep '"php"' | head -n 1)
+    
+    if [ -n "$require_php" ]; then
+        # Extract version: "php": "^8.1" -> 8.1
+        local version=$(echo "$require_php" | sed -E 's/.*"php": *"([^"]+)".*/\1/')
+        # extract major.minor
+        echo "$version" | grep -oE '[0-9]+\.[0-9]+' | head -n 1
+        return 0
+    fi
+    
+    return 1
+}
+
+# Function to read PHP version from .tool-versions (asdf)
+function utils_read_tool_versions {
+    local tool_file="$1"
+    
+    if [ ! -f "$tool_file" ]; then
+        return 1
+    fi
+    
+    # Look for line starting with php
+    local php_line=$(grep "^php " "$tool_file" 2>/dev/null | head -n 1)
+    
+    if [ -n "$php_line" ]; then
+        # Extract version: php 8.1.0 -> 8.1.0
+        local version=$(echo "$php_line" | awk '{print $2}')
+        # extract major.minor
+        echo "$version" | grep -oE '[0-9]+\.[0-9]+' | head -n 1
+        return 0
+    fi
+    
+    return 1
+}
+
 # Module: shell.sh
 # PHPSwitch Shell Management
 # Handles shell detection and configuration file updates
 
-# Function to detect shell type with fish support
+# Function to detect shell type with enhanced detection
 function shell_detect_shell {
+    # First, check if we're in a specific shell based on environment variables
     if [ -n "$ZSH_VERSION" ]; then
         echo "zsh"
     elif [ -n "$BASH_VERSION" ]; then
@@ -946,41 +1259,91 @@ function shell_detect_shell {
     elif [ -n "$FISH_VERSION" ] || [[ "$SHELL" == *"fish" ]]; then
         echo "fish"
     else
-        echo "unknown"
+        # Fall back to checking the $SHELL variable
+        case "$SHELL" in
+            *zsh)
+                echo "zsh"
+                ;;
+            *bash)
+                echo "bash"
+                ;;
+            *fish)
+                echo "fish"
+                ;;
+            *)
+                # Default to a best guess based on OS
+                if [ "$(uname)" = "Darwin" ]; then
+                    echo "zsh"  # macOS defaults to zsh since Catalina
+                else
+                    echo "bash" # Most Linux distros default to bash
+                fi
+                ;;
+        esac
     fi
 }
 
-# Update the shell RC file function to support fish
-function shell_update_rc {
-    local new_version="$1"
-    local shell_type=$(shell_detect_shell)
+# Function to determine the most appropriate RC file for the shell
+function shell_get_rc_file {
+    local shell_type="$1"
     local rc_file=""
     
-    # Determine shell config file
     case "$shell_type" in
         "zsh")
-            rc_file="$HOME/.zshrc"
+            # For zsh, prefer .zshrc
+            if [ -f "$HOME/.zshrc" ]; then
+                rc_file="$HOME/.zshrc"
+            elif [ -f "$HOME/.zprofile" ]; then
+                rc_file="$HOME/.zprofile"
+            else
+                rc_file="$HOME/.zshrc"
+                touch "$rc_file" # Create if it doesn't exist
+            fi
             ;;
         "bash")
-            rc_file="$HOME/.bashrc"
-            # If bashrc doesn't exist, check for bash_profile
-            if [ ! -f "$rc_file" ]; then
+            # For bash, try multiple files in order of preference
+            if [ -f "$HOME/.bashrc" ]; then
+                rc_file="$HOME/.bashrc"
+            elif [ -f "$HOME/.bash_profile" ]; then
                 rc_file="$HOME/.bash_profile"
-            fi
-            # If neither exists, check for profile
-            if [ ! -f "$rc_file" ]; then
+            elif [ -f "$HOME/.profile" ]; then
                 rc_file="$HOME/.profile"
+            else
+                # Use .bashrc as default
+                rc_file="$HOME/.bashrc"
+                touch "$rc_file" # Create if it doesn't exist
             fi
             ;;
         "fish")
-            rc_file="$HOME/.config/fish/config.fish"
+            # For fish, use config.fish
+            fish_config_dir="$HOME/.config/fish"
+            rc_file="$fish_config_dir/config.fish"
             # Ensure the directory exists
-            mkdir -p "$(dirname "$rc_file")"
+            mkdir -p "$fish_config_dir"
+            if [ ! -f "$rc_file" ]; then
+                touch "$rc_file" # Create if it doesn't exist
+            fi
             ;;
         *)
-            rc_file="$HOME/.profile"
+            # For unknown shells, default to .profile
+            if [ -f "$HOME/.profile" ]; then
+                rc_file="$HOME/.profile"
+            else
+                rc_file="$HOME/.profile"
+                touch "$rc_file" # Create if it doesn't exist
+            fi
             ;;
     esac
+    
+    echo "$rc_file"
+}
+
+# Enhanced function to update shell configuration with better PATH manipulation
+function shell_update_rc {
+    local new_version="$1"
+    local shell_type=$(shell_detect_shell)
+    local rc_file=$(shell_get_rc_file "$shell_type")
+    
+    core_debug_log "Detected shell: $shell_type, RC file: $rc_file"
     
     local php_bin_path=""
     local php_sbin_path=""
@@ -994,125 +1357,158 @@ function shell_update_rc {
         php_sbin_path="$HOMEBREW_PREFIX/opt/$new_version/sbin"
     fi
     
-    # Function to update a single shell config file
-    function update_single_rc_file {
-        local file="$1"
+    # Check if file exists (should have been created in shell_get_rc_file if needed)
+    if [ ! -f "$rc_file" ]; then
+        utils_show_status "error" "RC file $rc_file does not exist and could not be created"
+        return 1
+    fi
+    
+    # Check if we have write permissions
+    if [ ! -w "$rc_file" ]; then
+        utils_show_status "error" "No write permission for $rc_file"
+        exit 1
+    fi
+    
+    # Create backup (only if enabled)
+    if [ "$BACKUP_CONFIG_FILES" = "true" ]; then
+        local backup_file="${rc_file}.bak.$(date +%Y%m%d%H%M%S)"
         
-        # Check if file exists
-        if [ ! -f "$file" ]; then
-            utils_show_status "info" "$file does not exist. Creating it..."
-            touch "$file"
+        # Validate backup file path
+        if ! utils_validate_path "$backup_file"; then
+            utils_show_status "error" "Invalid backup file path, skipping backup"
+        else
+            # Create backup with secure permissions
+            if cp "$rc_file" "$backup_file"; then
+                # Set secure permissions (readable/writable by owner only)
+                chmod 600 "$backup_file" 2>/dev/null || {
+                    utils_show_status "warning" "Could not set secure permissions on backup file"
+                }
+                utils_show_status "info" "Created secure backup at ${backup_file}"
+                
+                # Clean up old backups
+                shell_cleanup_backups "$rc_file"
+            else
+                utils_show_status "error" "Failed to create backup file"
+            fi
         fi
-        
-        # Check if we have write permissions
-        if [ ! -w "$file" ]; then
-            utils_show_status "error" "No write permission for $file"
-            exit 1
-        fi
-        
-        # Create backup (only if enabled)
-        if [ "$BACKUP_CONFIG_FILES" = "true" ]; then
-            local backup_file="${file}.bak.$(date +%Y%m%d%H%M%S)"
-            cp "$file" "$backup_file"
-            utils_show_status "info" "Created backup at ${backup_file}"
-            
-            # Clean up old backups
-            shell_cleanup_backups "$file"
-        fi
-        
-        utils_show_status "info" "Updating PATH in $file for $shell_type shell..."
+    fi
+    
+    utils_show_status "info" "Updating PATH in $rc_file for $shell_type shell..."
+    
+    # Define marker comments to help find our section later
+    local begin_marker="# BEGIN PHPSWITCH MANAGED BLOCK - DO NOT EDIT MANUALLY"
+    local end_marker="# END PHPSWITCH MANAGED BLOCK"
+    
+    # Create secure temporary file
+    local temp_file
+    temp_file=$(utils_create_secure_temp_file)
+    
+    # Function to append the appropriate path setting code for each shell
+    function append_path_code {
+        local target_file="$1"
         
         if [ "$shell_type" = "fish" ]; then
             # Fish shell uses a different syntax for PATH manipulation
-            
-            # Remove old PHP paths from fish_user_paths
-            sed -i.tmp '/set -g fish_user_paths.*opt\/homebrew\/opt\/php/d' "$file"
-            sed -i.tmp '/set -g fish_user_paths.*usr\/local\/opt\/php/d' "$file"
-            rm -f "$file.tmp"
-            
-            # Add the new PHP paths to the beginning of the file
-            temp_file=$(mktemp)
-            
-            cat > "$temp_file" << EOL
-# PHP version paths - Added by phpswitch
-fish_add_path $php_bin_path
-fish_add_path $php_sbin_path
+            cat >> "$target_file" << EOL
+$begin_marker
+# Path configuration for PHP version: $new_version
+# Last updated: $(date)
+
+# Prepend PHP paths, filtering out stale PHP entries to avoid duplicates
+set -l _phpswitch_filtered
+for _p in \$PATH
+    string match -qv "*php*" -- \$_p; and set -a _phpswitch_filtered \$_p
+end
+set -gx PATH $php_bin_path $php_sbin_path \$_phpswitch_filtered
+
+# Refresh the command hash
+if type -q rehash
+    rehash
+end
+$end_marker
 
 EOL
-            
-            # Concatenate the original file to the temp file
-            cat "$file" >> "$temp_file"
-            
-            # Move the temp file back to the original
-            mv "$temp_file" "$file"
-            
         else
-            # Bash/Zsh path handling (existing code)
-            
-            # Remove old PHP paths from PATH variable
-            sed -i.tmp 's|^export PATH=".*opt/homebrew/opt/php@[0-9]\.[0-9]/bin:\$PATH"|#&|' "$file"
-            sed -i.tmp 's|^export PATH=".*opt/homebrew/opt/php@[0-9]\.[0-9]/sbin:\$PATH"|#&|' "$file"
-            sed -i.tmp 's|^export PATH=".*opt/homebrew/opt/php/bin:\$PATH"|#&|' "$file"
-            sed -i.tmp 's|^export PATH=".*opt/homebrew/opt/php/sbin:\$PATH"|#&|' "$file"
-            sed -i.tmp 's|^export PATH=".*usr/local/opt/php@[0-9]\.[0-9]/bin:\$PATH"|#&|' "$file"
-            sed -i.tmp 's|^export PATH=".*usr/local/opt/php@[0-9]\.[0-9]/sbin:\$PATH"|#&|' "$file"
-            sed -i.tmp 's|^export PATH=".*usr/local/opt/php/bin:\$PATH"|#&|' "$file"
-            sed -i.tmp 's|^export PATH=".*usr/local/opt/php/sbin:\$PATH"|#&|' "$file"
-            rm -f "$file.tmp"
-            
-            # Remove our added "force path reload" section if it exists
-            sed -i.tmp '/# Added by phpswitch script - force path reload/,+5d' "$file"
-            rm -f "$file.tmp"
-            
-            # Clean up any empty lines at the end
-            perl -i -pe 'END{if(/^\n+$/){$_=""}}' "$file" 2>/dev/null || true
-            
-            # Add the new PHP PATH entries at the top of the file
-            temp_file=$(mktemp)
-            
-            cat > "$temp_file" << EOL
-# PHP version paths - Added by phpswitch
+            # Bash/Zsh compatible code
+            cat >> "$target_file" << EOL
+$begin_marker
+# Path configuration for PHP version: $new_version
+# Last updated: $(date)
+
+# Prepend PHP paths to PATH to ensure they take precedence
 export PATH="$php_bin_path:$php_sbin_path:\$PATH"
 
+# Force shell to forget previous command locations
+hash -r 2>/dev/null || rehash 2>/dev/null || true
+
+# Add this function to refresh your terminal after sourcing:
+phpswitch_refresh() {
+    # Rehash to find new binaries
+    hash -r 2>/dev/null || rehash 2>/dev/null || true
+    
+    # Report the active PHP version
+    echo "PHP now: \$(php -v | head -n 1)"
+}
+$end_marker
+
 EOL
-            
-            # Concatenate the original file to the temp file
-            cat "$file" >> "$temp_file"
-            
-            # Move the temp file back to the original
-            mv "$temp_file" "$file"
         fi
-        
-        utils_show_status "success" "Updated PATH in $file for $new_version"
     }
     
-    # Update only the appropriate RC file for the current shell
-    update_single_rc_file "$rc_file"
-    
-    # Check for any other potential conflicting PATH settings
-    for file in "$HOME/.path" "$HOME/.config/fish/config.fish"; do
-        if [ -f "$file" ] && [ "$file" != "$rc_file" ]; then
-            if grep -q "PATH.*php" "$file"; then
-                utils_show_status "warning" "Found PHP PATH settings in $file that might conflict"
-                echo -n "Would you like to update this file too? (y/n): "
-                
-                if [ "$(utils_validate_yes_no "Update this file?" "y")" = "y" ]; then
-                    update_single_rc_file "$file"
-                else
-                    utils_show_status "warning" "Skipping $file - this might cause version conflicts"
-                fi
-            fi
-        fi
-    done
-    
-    # Also update force_reload_php function to handle fish shell
-    if [ "$shell_type" = "fish" ]; then
-        utils_show_status "info" "For immediate effect in fish shell, run:"
-        echo "set -gx PATH $php_bin_path $php_sbin_path \$PATH; and rehash"
+    # Check if our markers already exist in the file
+    if grep -q "$begin_marker" "$rc_file"; then
+        # Replace existing block
+        awk -v begin="$begin_marker" -v end="$end_marker" '
+            !found && !between {print}
+            index($0, begin) > 0 {found=1; between=1}
+            index($0, end) > 0 {between=0}
+            END {if (found) print ""}
+        ' "$rc_file" > "$temp_file"
+
+        # Append the new block
+        append_path_code "$temp_file"
+
+        # Add the rest of the file
+        awk -v begin="$begin_marker" -v end="$end_marker" '
+            between {next}
+            index($0, begin) > 0 {between=1; next}
+            index($0, end) > 0 {between=0; next}
+            !found && !between {next}
+            {print}
+        ' "$rc_file" >> "$temp_file"
+    else
+        # No existing block - add to beginning of file
+        append_path_code "$temp_file"
+        
+        # Add the original content
+        cat "$rc_file" >> "$temp_file"
     fi
+    
+    # Move the temp file back to the original
+    mv "$temp_file" "$rc_file"
+    
+    # Make sure file is executable for login shells
+    chmod +x "$rc_file" 2>/dev/null || true
+    
+    utils_show_status "success" "Updated PATH in $rc_file for $new_version"
+    
+    # Create instructions file for sourcing
+    local instructions_file
+    instructions_file=$(utils_create_secure_temp_file)
+    
+    if [ "$shell_type" = "fish" ]; then
+        echo "source \"$rc_file\"" > "$instructions_file"
+    else
+        echo "source \"$rc_file\"" > "$instructions_file"
+    fi
+    
+    chmod +x "$instructions_file"
+    
+    # Return the path to the instructions file so it can be used by the caller
+    echo "$instructions_file"
 }
 
-# Enhanced force_reload_php function with fish support
+# Completely redesigned shell_force_reload function for immediate effect
 function shell_force_reload {
     local version="$1"
     local php_bin_path=""
@@ -1127,45 +1523,89 @@ function shell_force_reload {
         php_sbin_path="$HOMEBREW_PREFIX/opt/$version/sbin"
     fi
     
+    # Check that the directories exist
+    if [ ! -d "$php_bin_path" ] || [ ! -d "$php_sbin_path" ]; then
+        utils_show_status "error" "PHP binary directories not found at $php_bin_path or $php_sbin_path"
+        return 1
+    fi
+    
+    # Log the current PATH for debugging
     core_debug_log "Before PATH update: $PATH"
     
+    # Direct PATH manipulation for the current shell
+    # First, remove any existing PHP paths from PATH
+    local new_path=""
+    local found_php=false
+    
     if [ "$shell_type" = "fish" ]; then
-        # For fish shell, we need different commands
-        # But we can't directly manipulate fish's PATH from bash/zsh
-        # So we'll just inform the user how to do it
+        # For fish shell, we need to tell user to do this manually
         echo "To update PATH in current fish shell session, run:"
-        echo "set -gx PATH $php_bin_path $php_sbin_path \$PATH; and rehash"
+        echo "set --erase PATH"
+        echo "fish_add_path $php_bin_path"
+        echo "fish_add_path $php_sbin_path"
+        echo "fish_add_path /usr/local/bin /usr/bin /bin /usr/sbin /sbin"
+        echo "rehash"
         return 0
     else
-        # First, remove any existing PHP paths from the PATH
-        local new_path=""
+        # For bash/zsh, we can directly modify the current shell's PATH
+        
+        # Build a new PATH with PHP paths at the beginning
+        local system_paths=""
+        local php_paths="$php_bin_path:$php_sbin_path"
+        
+        # Validate PHP paths before using them
+        if ! utils_validate_path "$php_bin_path"; then
+            utils_show_status "error" "Invalid PHP bin path: $php_bin_path"
+            return 1
+        fi
+        if ! utils_validate_path "$php_sbin_path"; then
+            utils_show_status "error" "Invalid PHP sbin path: $php_sbin_path"
+            return 1
+        fi
+        
         IFS=:
         for path_component in $PATH; do
-            if ! echo "$path_component" | grep -q "php"; then
-                if [ -z "$new_path" ]; then
-                    new_path="$path_component"
+            # Validate each path component before processing
+            if [[ -n "$path_component" ]]; then
+                if ! utils_validate_path "$path_component" "true"; then
+                    core_debug_log "Skipping invalid PATH component: $path_component"
+                    continue
+                fi
+                
+                # Skip any PHP-related paths
+                if echo "$path_component" | grep -q -i "php"; then
+                    found_php=true
+                    continue
+                fi
+                
+                # Add non-PHP paths
+                if [ -z "$system_paths" ]; then
+                    system_paths="$path_component"
                 else
-                    new_path="$new_path:$path_component"
+                    system_paths="$system_paths:$path_component"
                 fi
             fi
         done
         unset IFS
         
-        # Now add the new PHP bin and sbin directories to the start of the PATH
-        if [ -d "$php_bin_path" ] && [ -d "$php_sbin_path" ]; then
-            export PATH="$php_bin_path:$php_sbin_path:$new_path"
-            core_debug_log "After PATH update: $PATH"
-            
-            # Force the shell to forget previous command locations
-            hash -r 2>/dev/null || rehash 2>/dev/null || true
-            
-            # Verify the PHP binary now in use
-            core_debug_log "PHP now resolves to: $(which php)"
-            core_debug_log "PHP version now: $(php -v | head -n 1)"
-            
+        # Set the new PATH with PHP paths first
+        export PATH="$php_bin_path:$php_sbin_path:$system_paths"
+        
+        # Force the shell to forget previous command locations
+        hash -r 2>/dev/null || rehash 2>/dev/null || true
+        
+        # Log the updated PATH for debugging
+        core_debug_log "After PATH update: $PATH"
+        
+        # Verify PHP version
+        local current_php=$(which php)
+        core_debug_log "PHP now resolves to: $current_php"
+        
+        if [[ "$current_php" == *"$version"* ]] || [[ "$current_php" == *"php/bin/php" && "$version" == "php@default" ]]; then
+            core_debug_log "PATH update successful"
             return 0
         else
-            utils_show_status "error" "PHP binary directories not found at $php_bin_path or $php_sbin_path"
+            core_debug_log "PATH update failed. PHP still resolves to: $current_php"
             return 1
         fi
     fi
@@ -1176,11 +1616,107 @@ function shell_cleanup_backups {
     local file_prefix="$1"
     local max_backups="${MAX_BACKUPS:-5}"
     
-    # List backup files sorted by modification time (oldest first)
-    for old_backup in $(ls -t "${file_prefix}.bak."* 2>/dev/null | tail -n +$((max_backups+1))); do
-        core_debug_log "Removing old backup: $old_backup"
-        rm -f "$old_backup"
+    # Collect backups via glob into array (safe: no word-splitting)
+    local -a backup_files=()
+    local f
+    for f in "${file_prefix}.bak."*; do
+        [ -e "$f" ] && backup_files+=("$f")
     done
+    local count=${#backup_files[@]}
+    if [ "$count" -gt "$max_backups" ]; then
+        local to_delete=$(( count - max_backups ))
+        # Sort by mtime ascending (oldest first), remove the excess
+        while IFS= read -r old_backup; do
+            [ -f "$old_backup" ] || continue
+            core_debug_log "Removing old backup: $old_backup"
+            rm -f "$old_backup"
+            (( to_delete-- ))
+            [ "$to_delete" -le 0 ] && break
+        done < <(stat -f '%m %N' "${backup_files[@]}" 2>/dev/null | sort -n | awk '{print $2}')
+    fi
+}
+
+# Function to create a direct executable script that can be sourced to reload PHP
+function shell_create_reload_script {
+    local version="$1"
+    local shell_type=$(shell_detect_shell)
+    local php_bin_path=""
+    local php_sbin_path=""
+    
+    if [ "$version" = "php@default" ]; then
+        php_bin_path="$HOMEBREW_PREFIX/opt/php/bin"
+        php_sbin_path="$HOMEBREW_PREFIX/opt/php/sbin"
+    else
+        php_bin_path="$HOMEBREW_PREFIX/opt/$version/bin"
+        php_sbin_path="$HOMEBREW_PREFIX/opt/$version/sbin"
+    fi
+    
+    # Create a temporary script that can be sourced to reload the PATH
+    local reload_script
+    reload_script=$(utils_create_secure_temp_file)
+    
+    if [ "$shell_type" = "fish" ]; then
+        cat > "$reload_script" << EOL
+#!/usr/bin/env fish
+# PHPSwitch temporary reload script for fish shell
+# Generated: $(date)
+
+echo "Reloading PATH with PHP $version..."
+
+# Prepend PHP paths, filtering out stale PHP entries to avoid duplicates
+set -l _phpswitch_filtered
+for _p in \$PATH
+    string match -qv "*php*" -- \$_p; and set -a _phpswitch_filtered \$_p
+end
+set -gx PATH $php_bin_path $php_sbin_path \$_phpswitch_filtered
+
+# Refresh command hash
+if type -q rehash
+    rehash
+end
+
+# Verify PHP version
+echo "Active PHP version is now: "(php -v | head -n 1)
+EOL
+    else
+        # For bash/zsh
+        cat > "$reload_script" << EOL
+#!/bin/bash
+# PHPSwitch temporary reload script for bash/zsh shell
+# Generated: $(date)
+
+echo "Reloading PATH with PHP $version..."
+
+# Build new PATH with PHP directories at the beginning
+NEW_PATH="$php_bin_path:$php_sbin_path"
+
+# Add back non-PHP paths
+OLD_IFS=\$IFS
+IFS=:
+for path_component in \$PATH; do
+    # Skip PHP-related paths
+    if echo "\$path_component" | grep -q -i "php"; then
+        continue
+    fi
+    
+    # Add non-PHP path
+    NEW_PATH="\$NEW_PATH:\$path_component"
+done
+IFS=\$OLD_IFS
+
+# Set the new PATH
+export PATH="\$NEW_PATH"
+
+# Force shell to forget previous command locations
+hash -r 2>/dev/null || rehash 2>/dev/null || true
+
+# Verify PHP version
+echo "Active PHP version is now: \$(php -v | head -n 1)"
+EOL
+    fi
+    
+    chmod +x "$reload_script"
+    echo "$reload_script"
 }
 # Module: version.sh
 # PHPSwitch Version Management
@@ -1190,16 +1726,36 @@ function shell_cleanup_backups {
 function version_resolve_php_version {
     local version="$1"
     
-    # Handle the case where php@8.4 is actually the default php
-    if [ "$version" = "php@8.4" ] && [ ! -d "$HOMEBREW_PREFIX/opt/php@8.4" ] && [ -d "$HOMEBREW_PREFIX/opt/php" ]; then
-        local default_version=$(php -v 2>/dev/null | head -n 1 | cut -d " " -f 2 | cut -d "." -f 1,2)
-        if [ "$default_version" = "8.4" ]; then
+    # If the version directory exists, use it directly
+    if [ -d "$HOMEBREW_PREFIX/opt/$version" ]; then
+        echo "$version"
+        return
+    fi
+    
+    # If it's php@default, return as is
+    if [ "$version" = "php@default" ]; then
+        echo "$version"
+        return
+    fi
+    
+    # Check if this version matches the default php version
+    # Only if the specific version folder doesn't exist (checked above)
+    if [ -d "$HOMEBREW_PREFIX/opt/php" ]; then
+        # Get default php version (e.g. 8.4)
+        local default_version_full=$(brew list --versions php | head -n 1)
+        local default_version_str=$(echo "$default_version_full" | awk '{print $2}')
+        local default_version=$(echo "$default_version_str" | cut -d. -f1,2)
+        
+        # Check if requested version matches default version (e.g. php@8.4 == 8.4)
+        local requested_num=$(echo "$version" | sed 's/php@//')
+        
+        if [ "$requested_num" = "$default_version" ]; then
             echo "php@default"
             return
         fi
     fi
     
-    # Return the original version
+    # Return the original version if no resolution found
     echo "$version"
 }
 
@@ -1207,22 +1763,69 @@ function version_resolve_php_version {
 function version_check_project {
     local current_dir="$(pwd)"
     local php_version_file=""
-    local supported_files=(".php-version" ".phpversion" ".php")
+    local project_version=""
+    local custom_files=(".php-version" ".phpversion" ".php")
     
     # Look for version files in current directory and parent directories
-    while [ "$current_dir" != "/" ]; do
-        for file in "${supported_files[@]}"; do
+    while [ "$current_dir" != "/" ] && [ "$current_dir" != "." ]; do
+        # 1. Custom PHPSwitch files (Highest Priority)
+        for file in "${custom_files[@]}"; do
             if [ -f "$current_dir/$file" ]; then
                 php_version_file="$current_dir/$file"
+                project_version=$(cat "$php_version_file" | tr -d '[:space:]')
                 core_debug_log "Found PHP version file: $php_version_file"
                 break 2
             fi
         done
+        
+        # 2. composer.json
+        if [ -f "$current_dir/composer.json" ]; then
+            if composer_ver=$(utils_read_composer_version "$current_dir/composer.json"); then
+                if [ -n "$composer_ver" ]; then
+                    php_version_file="$current_dir/composer.json"
+                    project_version="$composer_ver"
+                    core_debug_log "Found PHP version in composer.json: $composer_ver"
+                    break
+                fi
+            fi
+        fi
+        
+        # 3. .tool-versions
+        if [ -f "$current_dir/.tool-versions" ]; then
+            if tool_ver=$(utils_read_tool_versions "$current_dir/.tool-versions"); then
+                if [ -n "$tool_ver" ]; then
+                    php_version_file="$current_dir/.tool-versions"
+                    project_version="$tool_ver"
+                    core_debug_log "Found PHP version in .tool-versions: $tool_ver"
+                    break
+                fi
+            fi
+        fi
+        
+        # Move to parent directory
         current_dir="$(dirname "$current_dir")"
     done
     
-    if [ -n "$php_version_file" ]; then
-        local project_version=$(cat "$php_version_file" | tr -d '[:space:]')
+    if [ -n "$php_version_file" ] && [ -n "$project_version" ]; then
+        # Validate the version file path
+        if ! utils_validate_path "$php_version_file"; then
+            core_debug_log "Invalid version file path: $php_version_file"
+            return 1
+        fi
+        
+        # Basic validation: check length and characters
+        if [[ ${#project_version} -gt 32 ]]; then
+            core_debug_log "Version string too long in $php_version_file"
+            return 1
+        fi
+        
+        # Validate version string against an allowlist of safe characters.
+        # Avoids $'\0' in [[ == ]] patterns which expands to empty on bash 3.2 (macOS),
+        # turning *$'\0'* into ** and matching every string.
+        if ! [[ "$project_version" =~ ^[a-zA-Z0-9.@_-]+$ ]]; then
+            core_debug_log "Invalid characters in version string from: $php_version_file"
+            return 1
+        fi
         
         # Handle different version formats
         if [[ "$project_version" == php@* ]]; then
@@ -1257,6 +1860,9 @@ function version_check_project {
                 echo "php@$project_version.0"
                 return 0
             fi
+        else
+             core_debug_log "Unknown version format: $project_version"
+             return 1
         fi
     fi
     
@@ -1273,8 +1879,8 @@ function version_set_project {
         version="${version#php@}"
     fi
     
-    echo -n "Creating $file_name in the current directory with version $version. Continue? (y/n): "
-    if [ "$(utils_validate_yes_no "Create project PHP version file?" "y")" = "y" ]; then
+    printf "  Create %s in the current directory with version %s? (y/n) " "$file_name" "$version"
+    if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
         echo "$version" > "$file_name"
         utils_show_status "success" "Created project PHP version file: $file_name"
         utils_show_status "info" "This directory and its subdirectories will now use PHP $version"
@@ -1294,7 +1900,8 @@ function version_install_php {
     utils_show_status "info" "Installing $install_version... This may take a while..."
     
     # Capture both stdout and stderr from brew install
-    local temp_output=$(mktemp)
+    local temp_output
+    temp_output=$(utils_create_secure_temp_file) || { utils_show_status "error" "Failed to create temp file"; return 1; }
     if brew install "$install_version" > "$temp_output" 2>&1; then
         utils_show_status "success" "$version installed successfully"
         rm -f "$temp_output"
@@ -1311,8 +1918,8 @@ function version_install_php {
             echo "Try closing applications that might be using PHP, or restart your computer."
         elif echo "$error_output" | grep -q "already installed"; then
             utils_show_status "warning" "$version appears to be already installed but may be broken"
-            echo -n "Would you like to reinstall it? (y/n): "
-            if [ "$(utils_validate_yes_no "Reinstall?" "y")" = "y" ]; then
+            printf "  Reinstall it? (y/n) "
+            if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
                 if brew reinstall "$install_version"; then
                     utils_show_status "success" "$version reinstalled successfully"
                     return 0
@@ -1331,11 +1938,13 @@ function version_install_php {
         elif echo "$error_output" | grep -q "cannot install because it conflicts with"; then
             utils_show_status "error" "Installation conflict detected"
             echo "There appears to be a conflict with another package."
-            local conflicting_package=$(echo "$error_output" | grep -o "conflicts with [^ ]*" | cut -d' ' -f3)
-            if [ -n "$conflicting_package" ]; then
+            local conflicting_package
+            conflicting_package=$(echo "$error_output" | grep -o "conflicts with [^ ]*" | cut -d' ' -f3)
+            # Validate before using in commands — only allow safe package name characters
+            if [ -n "$conflicting_package" ] && [[ "$conflicting_package" =~ ^[a-zA-Z0-9@._-]+$ ]]; then
                 echo "The conflicting package is: $conflicting_package"
-                echo -n "Would you like to uninstall the conflicting package? (y/n): "
-                if [ "$(utils_validate_yes_no "Uninstall conflict?" "n")" = "y" ]; then
+                printf "  Uninstall the conflicting package? (y/n) "
+                if [ "$(utils_validate_yes_no "" "n")" = "y" ]; then
                     if brew uninstall "$conflicting_package"; then
                         utils_show_status "success" "Uninstalled $conflicting_package"
                         utils_show_status "info" "Retrying installation of $version..."
@@ -1352,41 +1961,37 @@ function version_install_php {
             utils_show_status "error" "Failed to install $version"
         fi
         
-        echo ""
-        echo "Error details:"
-        echo "---------------"
+        printf "\n  Error details:\n\n"
         echo "$error_output" | head -n 10
         if [ $(echo "$error_output" | wc -l) -gt 10 ]; then
-            echo "... (truncated, see full log with 'brew install -v $install_version')"
+            printf "  ... (truncated, see full log with 'brew install -v %s')\n" "$install_version"
         fi
-        echo ""
-        echo "Possible solutions:"
-        echo "1. Run 'brew doctor' to check for any issues with your Homebrew installation"
-        echo "2. Run 'brew update' and try again"
-        echo "3. Check for any conflicting dependencies with 'brew deps --tree $version'"
-        echo "4. You might need to uninstall conflicting packages first"
-        echo "5. Try installing with verbose output: 'brew install -v $version'"
-        echo ""
-        echo -n "Would you like to try a different approach? (y/n): "
-        
-        if [ "$(utils_validate_yes_no "Would you like to try a different approach?" "n")" = "y" ]; then
-            echo "Choose an option:"
-            echo "1) Run 'brew doctor' first then retry"
-            echo "2) Run 'brew update' first then retry"
-            echo "3) Try installing with verbose output"
-            echo "4) Try force reinstall"
-            echo "5) Exit and let me handle it manually"
-            
+        printf "\n  Possible solutions:\n\n"
+        printf "    1  Run 'brew doctor' to check your Homebrew installation\n"
+        printf "    2  Run 'brew update' and try again\n"
+        printf "    3  Check conflicts with 'brew deps --tree %s'\n" "$version"
+        printf "    4  Uninstall conflicting packages first\n"
+        printf "    5  Try verbose output: 'brew install -v %s'\n\n" "$version"
+        printf "  Try a different approach? (y/n) "
+
+        if [ "$(utils_validate_yes_no "" "n")" = "y" ]; then
+            printf "\n  Choose an option:\n\n"
+            printf "    1  run 'brew doctor' then retry\n"
+            printf "    2  run 'brew update' then retry\n"
+            printf "    3  install with verbose output\n"
+            printf "    4  force reinstall\n"
+            printf "    5  exit and handle manually\n\n"
+
             local valid_choice=false
             local fix_option
-            
+
             while [ "$valid_choice" = "false" ]; do
                 read -r fix_option
-                
+
                 if [[ "$fix_option" =~ ^[1-5]$ ]]; then
                     valid_choice=true
                 else
-                    echo -n "Please enter a number between 1 and 5: "
+                    printf "  Enter a number between 1 and 5 "
                 fi
             done
             
@@ -1419,8 +2024,10 @@ function version_install_php {
             esac
             
             # Check if the retry was successful
-            if brew list --formula | grep -q "^$install_version$" || 
-               ([ "$install_version" = "php" ] && brew list --formula | grep -q "^php$"); then
+            local _installed_list
+            _installed_list=$(brew list --formula 2>/dev/null)
+            if echo "$_installed_list" | grep -q "^$install_version$" || \
+               ([ "$install_version" = "php" ] && echo "$_installed_list" | grep -q "^php$"); then
                 utils_show_status "success" "$version installed successfully on retry"
                 return 0
             else
@@ -1448,9 +2055,9 @@ function version_uninstall_php {
     local current_version=$(core_get_current_php_version)
     if [ "$current_version" = "$version" ]; then
         utils_show_status "warning" "You are attempting to uninstall the currently active PHP version"
-        echo -n "Would you like to continue? This may break your PHP environment. (y/n): "
-        
-        if [ "$(utils_validate_yes_no "Continue?" "n")" = "n" ]; then
+        printf "  Continue? This may break your PHP environment. (y/n) "
+
+        if [ "$(utils_validate_yes_no "" "n")" = "n" ]; then
             utils_show_status "info" "Uninstallation cancelled"
             return 1
         fi
@@ -1460,12 +2067,17 @@ function version_uninstall_php {
     if brew services list | grep -q "$service_name"; then
         utils_show_status "info" "Stopping PHP-FPM service for $version..."
         brew services stop "$service_name"
+        
+        # Clean up service files to avoid issues on future installations
+        if command -v fpm_cleanup_service &>/dev/null; then
+            fpm_cleanup_service "$version"
+        fi
     fi
     
     # Unlink the PHP version if it's linked
     if [ "$current_version" = "$version" ]; then
         utils_show_status "info" "Unlinking $version..."
-        brew unlink "$version" 2>/dev/null
+        brew unlink "$version" &>/dev/null
     fi
     
     # Uninstall the PHP version
@@ -1480,9 +2092,9 @@ function version_uninstall_php {
         utils_show_status "success" "$version has been uninstalled"
         
         # Ask about config files
-        echo -n "Would you like to remove configuration files as well? (y/n): "
-        
-        if [ "$(utils_validate_yes_no "Remove config files?" "n")" = "y" ]; then
+        printf "  Remove configuration files as well? (y/n) "
+
+        if [ "$(utils_validate_yes_no "" "n")" = "y" ]; then
             # Extract version number (e.g., 8.2 from php@8.2)
             local php_version="${version#php@}"
             if [ -d "$HOMEBREW_PREFIX/etc/php/$php_version" ]; then
@@ -1497,9 +2109,9 @@ function version_uninstall_php {
         # If this was the active version, suggest switching to another version
         if [ "$current_version" = "$version" ]; then
             utils_show_status "warning" "You have uninstalled the active PHP version"
-            echo -n "Would you like to switch to another installed PHP version? (y/n): "
-            
-            if [ "$(utils_validate_yes_no "Switch to another version?" "y")" = "y" ]; then
+            printf "  Switch to another installed PHP version? (y/n) "
+
+            if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
                 # Show menu with remaining PHP versions
                 return 2
             else
@@ -1516,7 +2128,7 @@ function version_uninstall_php {
     fi
 }
 
-# Function to switch PHP version with enhanced PATH handling
+# Improved function to switch PHP version with enhanced PATH handling
 function version_switch_php {
     local new_version="$1"
     local is_installed="$2"
@@ -1535,9 +2147,9 @@ function version_switch_php {
     # Install the version if not installed
     if [ "$is_installed" = "false" ]; then
         utils_show_status "info" "$new_version is not installed"
-        echo -n "Would you like to install it? (y/n): "
-        
-        if [ "$(utils_validate_yes_no "Install?" "n")" = "y" ]; then
+        printf "  Install it? (y/n) "
+
+        if [ "$(utils_validate_yes_no "" "n")" = "y" ]; then
             if ! version_install_php "$new_version"; then
                 utils_show_status "error" "Installation failed"
                 exit 1
@@ -1575,9 +2187,9 @@ function version_switch_php {
                 echo "This suggests the package is registered but files are missing."
             fi
             
-            echo -n "Would you like to attempt to reinstall it? (y/n): "
-            
-            if [ "$(utils_validate_yes_no "Reinstall?" "y")" = "y" ]; then
+            printf "  Attempt to reinstall it? (y/n) "
+
+            if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
                 if ! brew reinstall "$brew_version"; then
                     utils_show_status "error" "Reinstallation failed, trying forced reinstall..."
                     if ! brew reinstall --force "$brew_version"; then
@@ -1604,24 +2216,21 @@ function version_switch_php {
         utils_show_status "info" "$new_version is already active in Homebrew"
     else
         utils_show_status "info" "Switching from $current_version to $new_version..."
-        
-        # Check for any conflicting PHP installations
-        core_check_php_conflicts
-        
+
         # Unlink current PHP (if any)
         if [ "$current_version" != "none" ]; then
             utils_show_status "info" "Unlinking $current_version..."
-            brew unlink "$current_version" 2>/dev/null
+            brew unlink "$current_version" &>/dev/null
         fi
-        
+
         # Link new PHP with progressive fallback strategies
         utils_show_status "info" "Linking $new_version..."
-        
+
         # Strategy 1: Normal linking
-        if brew link --force "$brew_version" 2>/dev/null; then
+        if brew link --force "$brew_version" &>/dev/null; then
             utils_show_status "success" "Linked $new_version successfully"
         # Strategy 2: Overwrite linking
-        elif brew link --overwrite "$brew_version" 2>/dev/null; then
+        elif brew link --overwrite "$brew_version" &>/dev/null; then
             utils_show_status "success" "Linked $new_version with overwrite option"
         # Strategy 3: Manual symlinking
         else
@@ -1629,14 +2238,17 @@ function version_switch_php {
             
             # Try to directly create symlinks
             local php_bin_path="$HOMEBREW_PREFIX/opt/$brew_version/bin"
+            local php_sbin_path="$HOMEBREW_PREFIX/opt/$brew_version/sbin"
             
             if [ ! -d "$php_bin_path" ] && [ "$new_version" = "php@default" ]; then
                 php_bin_path="$HOMEBREW_PREFIX/opt/php/bin"
+                php_sbin_path="$HOMEBREW_PREFIX/opt/php/sbin"
             fi
             
             if [ -d "$php_bin_path" ]; then
                 for file in "$php_bin_path"/*; do
-                    if [ -f "$file" ]; then
+                    if [ -f "$file" ] && [ -x "$file" ]; then
+                        local filename
                         filename=$(basename "$file")
                         sudo ln -sf "$file" "$HOMEBREW_PREFIX/bin/$filename" 2>/dev/null
                     fi
@@ -1649,8 +2261,11 @@ function version_switch_php {
         fi
     fi
     
-    # Update shell RC file
-    shell_update_rc "$new_version"
+    # Create and update shell configuration
+    local instructions_file=$(shell_update_rc "$new_version")
+    
+    # Create a reload script for immediate use
+    local reload_script=$(shell_create_reload_script "$new_version")
     
     # Restart PHP-FPM if it's being used
     fpm_restart "$new_version"
@@ -1661,152 +2276,51 @@ function version_switch_php {
     if [ -z "$SOURCED" ]; then
         export SOURCED=true
         utils_show_status "info" "Applying changes to current shell..."
-        
-        # Directly modify the PATH to ensure the changes take effect immediately
-        if ! shell_force_reload "$new_version"; then
-            # If shell_force_reload failed, give clear instructions
-            shell_type=$(shell_detect_shell)
-            echo ""
-            echo "To apply the changes immediately, copy-paste this command:"
-            
-            case "$shell_type" in
-                "zsh")
-                    echo "export PATH=\"$php_bin_path:$php_sbin_path:\$PATH\"; hash -r"
-                    ;;
-                "bash")
-                    echo "export PATH=\"$php_bin_path:$php_sbin_path:\$PATH\"; hash -r"
-                    ;;
-                "fish")
-                    echo "set -gx PATH $php_bin_path $php_sbin_path \$PATH; and rehash"
-                    ;;
-                *)
-                    echo "export PATH=\"$php_bin_path:$php_sbin_path:\$PATH\""
-                    ;;
-            esac
-            echo ""
-        fi
-        
-        # Verify the active PHP version
-        CURRENT_PHP_VERSION=$(php -v 2>/dev/null | head -n 1 | cut -d " " -f 2 | cut -d "." -f 1,2)
-        
-        if [ "$new_version" = "php@default" ]; then
-            # For default PHP, we need to get the expected version from the actual binary
-            DEFAULT_PHP_PATH="$HOMEBREW_PREFIX/opt/php/bin/php"
-            if [ -f "$DEFAULT_PHP_PATH" ]; then
-                EXPECTED_VERSION=$($DEFAULT_PHP_PATH -v 2>/dev/null | head -n 1 | cut -d " " -f 2 | cut -d "." -f 1,2)
-            else
-                EXPECTED_VERSION="unknown"
-            fi
+
+        if shell_force_reload "$new_version"; then
+            utils_show_status "success" "Active PHP version is now: $(php -v | head -n 1 | cut -d " " -f 2)"
         else
-            EXPECTED_VERSION=$(echo "$new_version" | grep -o "[0-9]\.[0-9]")
-        fi
-        
-        if [ "$CURRENT_PHP_VERSION" = "$EXPECTED_VERSION" ]; then
-            utils_show_status "success" "Active PHP version is now: $CURRENT_PHP_VERSION"
-            php -v | head -n 1
-            
-            # Create a PATH validation command to check in new sessions
-            echo ""
-            echo "To verify PHP version in new terminal sessions, use this command:"
-            echo "which php && php -v | head -n 1"
-            
-            # Show actual binary location
-            echo ""
-            echo "PHP binary location: $(which php)"
+            shell_type=$(shell_detect_shell)
+            utils_show_status "warning" "Could not update PATH in current shell"
+            printf "\n  To activate %s in your current terminal:\n\n" "$new_version"
+            printf "    source \"%s\"\n\n" "$reload_script"
+            printf "  PHP binary location: %s\n" "$(which php)"
             if [ -L "$(which php)" ]; then
-                echo "Symlinked to: $(readlink $(which php))"
+                printf "  Symlinked to: %s\n" "$(readlink "$(which php)")"
             fi
-        else
-            utils_show_status "warning" "PHP version switch was not fully applied to the current shell"
-            echo "Expected PHP version: $EXPECTED_VERSION"
-            echo "Current PHP version: $(php -v | head -n 1)"
-            echo ""
-            
-            shell_type=$(shell_detect_shell)
-            
-            echo "To activate the new PHP version in your current shell, run:"
+            printf "\n  For permanent effect, open a new terminal or reload your shell:\n\n"
+
             case "$shell_type" in
                 "zsh")
-                    echo "source ~/.zshrc"
+                    printf "    source ~/.zshrc\n"
                     ;;
                 "bash")
                     if [ -f ~/.bashrc ]; then
-                        echo "source ~/.bashrc"
+                        printf "    source ~/.bashrc\n"
                     elif [ -f ~/.bash_profile ]; then
-                        echo "source ~/.bash_profile"
+                        printf "    source ~/.bash_profile\n"
                     else
-                        echo "source ~/.profile"
+                        printf "    source ~/.profile\n"
                     fi
                     ;;
                 "fish")
-                    echo "source ~/.config/fish/config.fish"
+                    printf "    source ~/.config/fish/config.fish\n"
                     ;;
                 *)
-                    echo "source ~/.profile"
+                    printf "    source ~/.profile\n"
                     ;;
             esac
-            
-            echo ""
-            echo "Or, you can directly update your PATH for this session:"
-            case "$shell_type" in
-                "zsh"|"bash")
-                    echo "export PATH=\"$php_bin_path:$php_sbin_path:\$PATH\"; hash -r"
-                    ;;
-                "fish")
-                    echo "set -gx PATH $php_bin_path $php_sbin_path \$PATH; and rehash"
-                    ;;
-                *)
-                    echo "export PATH=\"$php_bin_path:$php_sbin_path:\$PATH\""
-                    ;;
-            esac
-            
-            echo ""
-            echo "Or restart your terminal session to use the new PHP version."
+            printf "\n"
         fi
     else
-        shell_type=$(shell_detect_shell)
-        
-        echo "To apply the changes to your current terminal, run:"
-        case "$shell_type" in
-            "zsh")
-                echo "source ~/.zshrc"
-                ;;
-            "bash")
-                if [ -f ~/.bashrc ]; then
-                    echo "source ~/.bashrc"
-                elif [ -f ~/.bash_profile ]; then
-                    echo "source ~/.bash_profile"
-                else
-                    echo "source ~/.profile"
-                fi
-                ;;
-            "fish")
-                echo "source ~/.config/fish/config.fish"
-                ;;
-            *)
-                echo "source ~/.profile"
-                ;;
-        esac
-        
-        echo ""
-        echo "Or, you can directly update your PATH for this session:"
-        case "$shell_type" in
-            "zsh"|"bash")
-                echo "export PATH=\"$php_bin_path:$php_sbin_path:\$PATH\"; hash -r"
-                ;;
-            "fish")
-                echo "set -gx PATH $php_bin_path $php_sbin_path \$PATH; and rehash"
-                ;;
-            *)
-                echo "export PATH=\"$php_bin_path:$php_sbin_path:\$PATH\""
-                ;;
-        esac
-        
-        echo "Then verify with: php -v"
+        printf "\n  To apply changes to your current terminal:\n\n"
+        printf "    source \"%s\"\n\n" "$reload_script"
     fi
 }
 
-# Function for silent/quick PHP version switching for auto-switch
+# NOTE: version_auto_switch_php is not called anywhere. Auto-switching dispatches
+# through auto_switch_php in auto-switch.sh via the --auto-mode command flag.
+# Retained here in case it is needed for future direct programmatic use.
 function version_auto_switch_php {
     local new_version="$1"
     local brew_version="$new_version"
@@ -1832,7 +2346,7 @@ function version_auto_switch_php {
     
     # Update PATH for current session
     shell_force_reload "$new_version" &>/dev/null
-    
+
     # No UI feedback for auto-switching
     return 0
 }
@@ -1856,15 +2370,76 @@ function fpm_stop_other_services {
     local active_version="$1"
     local active_service=$(fpm_get_service_name "$active_version")
     
-    # Get all running PHP services
-    local running_services=$(brew services list | grep -E "^php(@[0-9]\.[0-9])?" | awk '{print $1}')
-    
-    for service in $running_services; do
+    # Get only actively running PHP services
+    local running_services
+    running_services=$(brew services list | grep -E "^php(@[0-9]\.[0-9])?" | awk '$2 == "started" {print $1}')
+
+    while IFS= read -r service; do
+        [ -z "$service" ] && continue
         if [ "$service" != "$active_service" ]; then
             utils_show_status "info" "Stopping PHP-FPM service for $service..."
             brew services stop "$service" >/dev/null 2>&1
         fi
-    done
+    done <<< "$running_services"
+}
+
+# Function to clean up PHP-FPM service files and fix permissions
+function fpm_cleanup_service {
+    local version="$1"
+    local service_name=$(fpm_get_service_name "$version")
+    
+    utils_show_status "info" "Cleaning up PHP-FPM service files for $service_name..."
+    
+    # Stop the service first
+    brew services stop "$service_name" >/dev/null 2>&1
+    
+    # Find and remove LaunchAgent/LaunchDaemon files
+    local launch_agent="$HOME/Library/LaunchAgents/homebrew.mxcl.$service_name.plist"
+    local launch_daemon="/Library/LaunchDaemons/homebrew.mxcl.$service_name.plist"
+    
+    if [ -f "$launch_agent" ]; then
+        utils_show_status "info" "Removing LaunchAgent file: $launch_agent"
+        rm -f "$launch_agent" 2>/dev/null
+    fi
+    
+    if [ -f "$launch_daemon" ]; then
+        utils_show_status "info" "Removing LaunchDaemon file (requires sudo): $launch_daemon"
+        sudo rm -f "$launch_daemon" 2>/dev/null
+    fi
+    
+    # Reset permissions if needed
+    local cellar_path="$HOMEBREW_PREFIX/Cellar/$service_name"
+    local opt_path="$HOMEBREW_PREFIX/opt/$service_name"
+    
+    if [ -d "$cellar_path" ]; then
+        utils_show_status "info" "Resetting permissions for: $cellar_path"
+        # Get secure username and validate it
+        local username
+        username="$(id -un)"
+        if utils_validate_username "$username"; then
+            sudo chown -R "$username" "$cellar_path" 2>/dev/null
+        else
+            utils_show_status "error" "Invalid username detected, skipping permission reset"
+        fi
+    fi
+    
+    if [ -d "$opt_path" ]; then
+        utils_show_status "info" "Resetting permissions for: $opt_path"
+        # Get secure username and validate it
+        local username
+        username="$(id -un)"
+        if utils_validate_username "$username"; then
+            sudo chown -R "$username" "$opt_path" 2>/dev/null
+        else
+            utils_show_status "error" "Invalid username detected, skipping permission reset"
+        fi
+    fi
+    
+    # Run brew services cleanup to clear stale services
+    utils_show_status "info" "Running brew services cleanup..."
+    brew services cleanup >/dev/null 2>&1
+    
+    utils_show_status "success" "Service cleanup completed for $service_name"
 }
 
 # Enhanced restart_php_fpm function with better error handling
@@ -1880,10 +2455,9 @@ function fpm_restart {
     # First, stop all other PHP-FPM services
     fpm_stop_other_services "$version"
     
-    # Check if PHP-FPM service is running
-    local is_running=false
-    if brew services list | grep "$service_name" | grep -q "started"; then
-        is_running=true
+    # Check if PHP-FPM service is running (awk exact-field match avoids false positives,
+    # e.g. "php" matching "php@8.1" with plain grep)
+    if brew services list | awk -v svc="$service_name" '$1 == svc' | grep -q "started"; then
         utils_show_status "info" "Restarting PHP-FPM service for $service_name..."
         
         # Try normal restart first
@@ -1893,53 +2467,100 @@ function fpm_restart {
         else
             utils_show_status "warning" "Failed to restart service: $restart_output"
             
-            # Check for specific errors
-            if echo "$restart_output" | grep -q "Permission denied"; then
-                utils_show_status "warning" "Permission denied. This could be due to file permissions or locked service files."
-                echo -n "Would you like to try with sudo? (y/n): "
-                
-                if [ "$(utils_validate_yes_no "Try with sudo?" "y")" = "y" ]; then
-                    utils_show_status "info" "Trying with sudo..."
-                    local sudo_output=$(sudo brew services restart "$service_name" 2>&1)
-                    if echo "$sudo_output" | grep -q "Successfully"; then
-                        utils_show_status "success" "PHP-FPM service restarted successfully with sudo"
-                    else
-                        utils_show_status "error" "Failed to restart service with sudo: $sudo_output"
-                        echo "You may need to restart manually with:"
-                        echo "sudo brew services restart $service_name"
+            # Check for specific error patterns
+            if echo "$restart_output" | grep -q "Bootstrap failed: 5: Input/output error"; then
+                utils_show_status "warning" "Detected bootstrap error. Attempting automatic service cleanup and repair..."
+                fpm_cleanup_service "$version"
+                utils_show_status "info" "Trying restart after cleanup..."
+                local retry_output=$(brew services start "$service_name" 2>&1)
+
+                if echo "$retry_output" | grep -q "Successfully"; then
+                    utils_show_status "success" "PHP-FPM service started successfully after cleanup"
+                else
+                    utils_show_status "error" "Failed to start service after cleanup: $retry_output"
+                    printf "  You may need to restart your computer or reinstall PHP %s\n" "$version"
+                    printf "  Try running: brew reinstall %s\n" "$service_name"
+                fi
+            # Check for other error types
+            elif echo "$restart_output" | grep -q "Permission denied"; then
+                utils_show_status "warning" "Permission denied. Attempting automatic service cleanup and repair..."
+                fpm_cleanup_service "$version"
+                utils_show_status "info" "Trying restart after cleanup..."
+                local cleanup_output=$(brew services start "$service_name" 2>&1)
+
+                if echo "$cleanup_output" | grep -q "Successfully"; then
+                    utils_show_status "success" "PHP-FPM service restarted successfully after cleanup"
+                else
+                    printf "  Try with sudo instead? (y/n) "
+                    if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
+                        utils_show_status "info" "Trying with sudo..."
+                        local sudo_output=$(sudo brew services restart "$service_name" 2>&1)
+                        if echo "$sudo_output" | grep -q "Successfully"; then
+                            utils_show_status "success" "PHP-FPM service restarted successfully with sudo"
+                            utils_show_status "warning" "Running with sudo changes file ownership. You may need to run cleanup later."
+                        else
+                            utils_show_status "error" "Failed to restart service with sudo: $sudo_output"
+                            printf "  You may need to restart manually with:\n"
+                            printf "    sudo brew services restart %s\n" "$service_name"
+                        fi
                     fi
                 fi
             elif echo "$restart_output" | grep -q "already started"; then
-                utils_show_status "warning" "Service reports as already started, but may need a force restart"
-                echo -n "Would you like to try stop and then start? (y/n): "
-                
-                if [ "$(utils_validate_yes_no "Force restart?" "y")" = "y" ]; then
-                    utils_show_status "info" "Stopping service first..."
-                    brew services stop "$service_name"
-                    sleep 2
-                    utils_show_status "info" "Starting service..."
-                    brew services start "$service_name"
+                utils_show_status "warning" "Service reports as already started. Forcing stop and restart..."
+                brew services stop "$service_name" >/dev/null 2>&1
+                local _i=0
+                while [ $_i -lt 6 ] && brew services list | awk -v svc="$service_name" '$1 == svc' | grep -q "started"; do
+                    sleep 0.5
+                    _i=$(( _i + 1 ))
+                done
+                local force_start_output
+                force_start_output=$(brew services start "$service_name" 2>&1)
+                if echo "$force_start_output" | grep -q "Successfully"; then
+                    utils_show_status "success" "PHP-FPM service started successfully"
+                else
+                    utils_show_status "error" "Failed to start service after force restart: $force_start_output"
+                    printf "  Manual restart may be required: brew services restart %s\n" "$service_name"
                 fi
             else
-                utils_show_status "error" "Unknown error restarting service"
-                echo "Manual restart may be required: brew services restart $service_name"
+                utils_show_status "error" "Unknown error restarting service. Attempting cleanup and repair..."
+                fpm_cleanup_service "$version"
+                utils_show_status "info" "Trying restart after cleanup..."
+                local unknown_retry=$(brew services start "$service_name" 2>&1)
+
+                if echo "$unknown_retry" | grep -q "Successfully"; then
+                    utils_show_status "success" "PHP-FPM service started successfully after cleanup"
+                else
+                    utils_show_status "error" "Could not recover service automatically"
+                    printf "  Manual restart may be required: brew services restart %s\n" "$service_name"
+                fi
             fi
         fi
     else
-        utils_show_status "info" "PHP-FPM service not active for $service_name"
-        echo -n "Would you like to start it? (y/n): "
-        
-        if [ "$(utils_validate_yes_no "Start service?" "y")" = "y" ]; then
-            utils_show_status "info" "Starting PHP-FPM service for $service_name..."
-            local start_output=$(brew services start "$service_name" 2>&1)
-            
-            if echo "$start_output" | grep -q "Successfully"; then
-                utils_show_status "success" "PHP-FPM service started successfully"
+        utils_show_status "info" "Starting PHP-FPM service for $service_name..."
+        local start_output=$(brew services start "$service_name" 2>&1)
+
+        if echo "$start_output" | grep -q "Successfully"; then
+            utils_show_status "success" "PHP-FPM service started successfully"
+        else
+            utils_show_status "warning" "Failed to start service: $start_output"
+
+            # Check for bootstrap/IO error specifically
+            if echo "$start_output" | grep -q "Bootstrap failed: 5: Input/output error"; then
+                utils_show_status "warning" "Detected bootstrap error. Attempting automatic service cleanup and repair..."
+                fpm_cleanup_service "$version"
+                utils_show_status "info" "Trying restart after cleanup..."
+                local retry_output=$(brew services start "$service_name" 2>&1)
+
+                if echo "$retry_output" | grep -q "Successfully"; then
+                    utils_show_status "success" "PHP-FPM service started successfully after cleanup"
+                else
+                    utils_show_status "error" "Failed to start service after cleanup: $retry_output"
+                    printf "  Manual intervention may be required. Consider reinstalling PHP:\n"
+                    printf "    brew reinstall %s\n" "$service_name"
+                fi
             else
-                utils_show_status "warning" "Failed to start service: $start_output"
-                echo -n "Would you like to try with sudo? (y/n): "
-                
-                if [ "$(utils_validate_yes_no "Try with sudo?" "y")" = "y" ]; then
+                printf "  Try with sudo? (y/n) "
+                if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
                     utils_show_status "info" "Trying with sudo..."
                     sudo brew services start "$service_name"
                 fi
@@ -1948,11 +2569,12 @@ function fpm_restart {
     fi
     
     # Verify the service is running after our operations
-    if brew services list | grep "$service_name" | grep -q "started"; then
+    if brew services list | awk -v svc="$service_name" '$1 == svc' | grep -q "started"; then
         utils_show_status "success" "PHP-FPM service for $service_name is running"
     else
         utils_show_status "warning" "PHP-FPM service for $service_name may not be running correctly"
-        echo "Check status with: brew services list | grep php"
+        printf "  Check status with: brew services list | grep php\n"
+        printf "  PHP-FPM is only needed for web server integration.\n"
     fi
     
     return 0
@@ -1982,47 +2604,70 @@ function ext_manage_extensions {
         ini_dir="$HOMEBREW_PREFIX/etc/php/$numeric_version"
     fi
     
-    utils_show_status "info" "PHP Extensions for $php_version (version $numeric_version):"
-    echo ""
-    
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "PHP Extensions for $php_version (version $numeric_version)" 192 132 252 103 232 249; printf "\n\n"
+    else
+        printf "\n  PHP Extensions for %s (version %s)\n\n" "$php_version" "$numeric_version"
+    fi
+
     # List installed extensions
-    echo "Currently loaded extensions:"
-    php -m | sort | grep -v "\[" | sed 's/^/- /'
-    
-    echo ""
-    echo "Extension configuration files:"
-    
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "  "; utils_print_gradient "Loaded extensions" 148 182 251 125 207 250; printf "\n\n"
+    else
+        printf "  Loaded extensions\n\n"
+    fi
+    php -m | sort | grep -v "\[" | sed 's/^/    /'
+
+    printf "\n"
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "  "; utils_print_gradient "Configuration files" 125 207 250 103 232 249; printf "\n\n"
+    else
+        printf "  Configuration files\n\n"
+    fi
+
     if [ -d "$ini_dir" ]; then
         if [ -d "$ini_dir/conf.d" ]; then
-            ls -1 "$ini_dir/conf.d" | grep -i "\.ini$" | sed 's/^/- /'
+            ls -1 "$ini_dir/conf.d" | grep -i "\.ini$" | sed 's/^/    /'
         else
-            echo "No conf.d directory found at $ini_dir/conf.d"
+            printf "    No conf.d directory found at %s/conf.d\n" "$ini_dir"
         fi
     else
-        echo "No configuration directory found at $ini_dir"
+        printf "    No configuration directory found at %s\n" "$ini_dir"
     fi
-    
-    echo ""
-    echo "Options:"
-    echo "1) Enable/disable an extension"
-    echo "2) Edit php.ini"
-    echo "3) Show detailed extension information"
-    echo "0) Back to main menu"
-    echo ""
-    echo -n "Please select an option (0-3): "
+
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "Options" 103 232 249 85 245 248; printf "\n\n"
+    else
+        printf "\n  Options\n\n"
+    fi
+    printf "    1  enable/disable an extension\n"
+    printf "    2  edit php.ini\n"
+    printf "    3  show detailed extension information\n"
+    printf "    0  back to main menu\n"
+    printf "\n"
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "  "; utils_print_gradient "Select (0-3)" 148 182 251 125 207 250; printf " "
+    else
+        printf "  Select (0-3) "
+    fi
     
     local option
     read -r option
     
     case $option in
         1)
-            echo -n "Enter extension name: "
+            printf "  Extension name "
             read -r ext_name
+            # Validate: only lowercase letters, digits, underscores, hyphens
+            if [[ -n "$ext_name" ]] && ! [[ "$ext_name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+                utils_show_status "error" "Invalid extension name: $ext_name"
+                return 1
+            fi
             if [ -n "$ext_name" ]; then
-                echo "Select action for $ext_name:"
-                echo "1) Enable extension"
-                echo "2) Disable extension"
-                echo -n "Select (1-2): "
+                printf "\n  Action for %s\n\n" "$ext_name"
+                printf "    1  enable\n"
+                printf "    2  disable\n"
+                printf "\n  Select (1-2) "
                 
                 local ext_action
                 read -r ext_action
@@ -2069,14 +2714,14 @@ function ext_manage_extensions {
             if [ -f "$php_ini" ]; then
                 utils_show_status "info" "Opening php.ini for $php_version..."
                 if [ -n "$EDITOR" ]; then
-                    $EDITOR "$php_ini"
+                    "$EDITOR" "$php_ini"
                 else
                     nano "$php_ini"
                 fi
                 
                 utils_show_status "info" "php.ini edited. Restart PHP-FPM to apply changes"
-                echo -n "Would you like to restart PHP-FPM now? (y/n): "
-                if [ "$(utils_validate_yes_no "Restart PHP-FPM?" "y")" = "y" ]; then
+                printf "  Restart PHP-FPM now? (y/n) "
+                if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
                     fpm_restart "$php_version"
                 fi
             else
@@ -2084,10 +2729,10 @@ function ext_manage_extensions {
             fi
             ;;
         3)
-            echo -n "Enter extension name (or leave blank for all): "
+            printf "  Extension name (blank for all) "
             read -r ext_detail
             if [ -n "$ext_detail" ]; then
-                php -i | grep -i "$ext_detail" | less
+                php -i | grep -iF "$ext_detail" | less
             else
                 php -i | less
             fi
@@ -2101,9 +2746,9 @@ function ext_manage_extensions {
     esac
     
     # Allow user to perform another extension management action
-    echo ""
-    echo -n "Would you like to perform another extension management action? (y/n): "
-    if [ "$(utils_validate_yes_no "Another action?" "y")" = "y" ]; then
+    printf "\n"
+    printf "  Perform another action? (y/n) "
+    if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
         ext_manage_extensions "$php_version"
     fi
 }
@@ -2129,14 +2774,15 @@ function auto_install {
             ;;
         *)
             utils_show_status "error" "Unsupported shell: $SHELL"
-            echo "Auto-switching is only supported for bash, zsh, and fish shells."
+            printf "  Auto-switching is only supported for bash, zsh, and fish shells.\n"
             return 1
             ;;
     esac
     
     # Update config file
-    sed -i.bak "s/AUTO_SWITCH_PHP_VERSION=.*/AUTO_SWITCH_PHP_VERSION=true/" "$HOME/.phpswitch.conf" 2>/dev/null
-    rm -f "$HOME/.phpswitch.conf.bak" 2>/dev/null
+    if [ -f "$HOME/.phpswitch.conf" ]; then
+        utils_set_config_value "AUTO_SWITCH_PHP_VERSION" "true" "$HOME/.phpswitch.conf"
+    fi
     
     # Create cache directory with proper permissions
     local cache_dir="$HOME/.cache/phpswitch"
@@ -2147,8 +2793,8 @@ function auto_install {
     # Ensure cache directory is writable
     if [ ! -w "$cache_dir" ] && [ -d "$cache_dir" ]; then
         utils_show_status "warning" "Cache directory $cache_dir is not writable"
-        echo -n "Would you like to fix permissions (this may require sudo)? (y/n): "
-        if [ "$(utils_validate_yes_no "Fix permissions?" "y")" = "y" ]; then
+        printf "  Fix permissions (may require sudo)? (y/n) "
+        if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
             # Try to fix permissions, first without sudo
             chmod u+w "$cache_dir" 2>/dev/null
             if [ ! -w "$cache_dir" ]; then
@@ -2170,7 +2816,7 @@ function auto_install {
     fi
     
     utils_show_status "success" "Auto-switching enabled"
-    echo "Auto-switching will take effect the next time you open a new terminal window or source your shell configuration file."
+    printf "  Auto-switching will take effect the next time you open a new terminal.\n"
     return 0
 }
 
@@ -2187,8 +2833,15 @@ function auto_install_zsh {
     # Create backup before modifying
     if [ -f "$rc_file" ]; then
         local backup_file="${rc_file}.bak.$(date +%Y%m%d%H%M%S)"
-        cp "$rc_file" "$backup_file" 2>/dev/null
-        utils_show_status "info" "Created backup at ${backup_file}"
+        
+        # Validate backup file path
+        if utils_validate_path "$backup_file"; then
+            if cp "$rc_file" "$backup_file" 2>/dev/null; then
+                # Set secure permissions (readable/writable by owner only)
+                chmod 600 "$backup_file" 2>/dev/null
+                utils_show_status "info" "Created secure backup at ${backup_file}"
+            fi
+        fi
     fi
     
     # Add the hook function to the rc file
@@ -2221,38 +2874,44 @@ function phpswitch_auto_detect_project() {
     # If not in cache, check for project file and add to cache
     if [ "$cache_hit" = "false" ]; then
         # Use a temporary file to avoid permission issues
-        local temp_cache_file=$(mktemp)
-        
+        local temp_cache_file
+        temp_cache_file=$(utils_create_secure_temp_file) || return 0
+
         # Copy existing cache if available
         if [ -f "$cache_file" ] && [ -r "$cache_file" ]; then
             cat "$cache_file" > "$temp_cache_file" 2>/dev/null
         fi
-        
+
         # Check for PHP version file
         for file in ".php-version" ".phpversion" ".php"; do
             if [ -f "$current_dir/$file" ]; then
-                # Store this in cache
-                echo "$current_dir:$(cat "$current_dir/$file" | tr -d '[:space:]')" >> "$temp_cache_file"
-                # Run phpswitch in auto mode
-                phpswitch --auto-mode > /dev/null 2>&1
-                
-                # Try to update the main cache file if writable
-                if [ -w "$(dirname "$cache_file")" ]; then
-                    mv "$temp_cache_file" "$cache_file" 2>/dev/null
+                local ver
+                ver=$(tr -d '[:space:]' < "$current_dir/$file" 2>/dev/null)
+                # Validate version string before caching
+                if [[ "$ver" =~ ^[a-zA-Z0-9.@_-]*$ ]]; then
+                    printf '%s:%s\n' "$current_dir" "$ver" >> "$temp_cache_file"
                 fi
+                phpswitch --auto-mode > /dev/null 2>&1
+                mv "$temp_cache_file" "$cache_file" 2>/dev/null || rm -f "$temp_cache_file" 2>/dev/null
                 return
             fi
         done
-        
-        # No PHP version file found, add to cache with empty version
-        echo "$current_dir:" >> "$temp_cache_file"
-        
-        # Try to update the main cache file if writable
-        if [ -w "$(dirname "$cache_file")" ]; then
-            mv "$temp_cache_file" "$cache_file" 2>/dev/null
-        else
-            rm -f "$temp_cache_file" 2>/dev/null
+
+        # Check for composer.json or .tool-versions using phpswitch helper
+        if [ -f "$current_dir/composer.json" ] || [ -f "$current_dir/.tool-versions" ]; then
+            local version
+            version=$(phpswitch --get-project-version 2>/dev/null)
+            if [ -n "$version" ]; then
+                printf '%s:%s\n' "$current_dir" "$version" >> "$temp_cache_file"
+                phpswitch --auto-mode > /dev/null 2>&1
+                mv "$temp_cache_file" "$cache_file" 2>/dev/null || rm -f "$temp_cache_file" 2>/dev/null
+                return
+            fi
         fi
+
+        # No PHP version file found, add to cache with empty version
+        printf '%s:\n' "$current_dir" >> "$temp_cache_file"
+        mv "$temp_cache_file" "$cache_file" 2>/dev/null || rm -f "$temp_cache_file" 2>/dev/null
     fi
 }
 
@@ -2290,8 +2949,15 @@ function auto_install_bash {
     # Create backup before modifying
     if [ -f "$rc_file" ]; then
         local backup_file="${rc_file}.bak.$(date +%Y%m%d%H%M%S)"
-        cp "$rc_file" "$backup_file" 2>/dev/null
-        utils_show_status "info" "Created backup at ${backup_file}"
+        
+        # Validate backup file path
+        if utils_validate_path "$backup_file"; then
+            if cp "$rc_file" "$backup_file" 2>/dev/null; then
+                # Set secure permissions (readable/writable by owner only)
+                chmod 600 "$backup_file" 2>/dev/null
+                utils_show_status "info" "Created secure backup at ${backup_file}"
+            fi
+        fi
     fi
     
     # Add the hook function to the rc file
@@ -2324,43 +2990,49 @@ function phpswitch_auto_detect_project() {
     # If not in cache, check for project file and add to cache
     if [ "$cache_hit" = "false" ]; then
         # Use a temporary file to avoid permission issues
-        local temp_cache_file=$(mktemp)
-        
+        local temp_cache_file
+        temp_cache_file=$(mktemp 2>/dev/null) || return 0
+        chmod 600 "$temp_cache_file" 2>/dev/null
+
         # Copy existing cache if available
         if [ -f "$cache_file" ] && [ -r "$cache_file" ]; then
             cat "$cache_file" > "$temp_cache_file" 2>/dev/null
         fi
-        
+
         # Check for PHP version file
         for file in ".php-version" ".phpversion" ".php"; do
             if [ -f "$current_dir/$file" ]; then
-                # Store this in cache
-                echo "$current_dir:$(cat "$current_dir/$file" | tr -d '[:space:]')" >> "$temp_cache_file"
-                # Run phpswitch in auto mode
-                phpswitch --auto-mode > /dev/null 2>&1
-                
-                # Try to update the main cache file if writable
-                if [ -w "$(dirname "$cache_file")" ]; then
-                    mv "$temp_cache_file" "$cache_file" 2>/dev/null
+                local ver
+                ver=$(tr -d '[:space:]' < "$current_dir/$file" 2>/dev/null)
+                if [[ "$ver" =~ ^[a-zA-Z0-9.@_-]*$ ]]; then
+                    printf '%s:%s\n' "$current_dir" "$ver" >> "$temp_cache_file"
                 fi
+                phpswitch --auto-mode > /dev/null 2>&1
+                mv "$temp_cache_file" "$cache_file" 2>/dev/null || rm -f "$temp_cache_file" 2>/dev/null
                 return
             fi
         done
-        
-        # No PHP version file found, add to cache with empty version
-        echo "$current_dir:" >> "$temp_cache_file"
-        
-        # Try to update the main cache file if writable
-        if [ -w "$(dirname "$cache_file")" ]; then
-            mv "$temp_cache_file" "$cache_file" 2>/dev/null
-        else
-            rm -f "$temp_cache_file" 2>/dev/null
+
+        # Check for composer.json or .tool-versions using phpswitch helper
+        if [ -f "$current_dir/composer.json" ] || [ -f "$current_dir/.tool-versions" ]; then
+            local version
+            version=$(phpswitch --get-project-version 2>/dev/null)
+            if [ -n "$version" ]; then
+                printf '%s:%s\n' "$current_dir" "$version" >> "$temp_cache_file"
+                phpswitch --auto-mode > /dev/null 2>&1
+                mv "$temp_cache_file" "$cache_file" 2>/dev/null || rm -f "$temp_cache_file" 2>/dev/null
+                return
+            fi
         fi
+
+        # No PHP version file found, add to cache with empty version
+        printf '%s:\n' "$current_dir" >> "$temp_cache_file"
+        mv "$temp_cache_file" "$cache_file" 2>/dev/null || rm -f "$temp_cache_file" 2>/dev/null
     fi
 }
 
 # Enable the cd hook for bash
-if [[ $PROMPT_COMMAND != *"phpswitch_auto_detect_project"* ]]; then
+if [[ "$PROMPT_COMMAND" != *"phpswitch_auto_detect_project"* ]]; then
     PROMPT_COMMAND="phpswitch_auto_detect_project;$PROMPT_COMMAND"
 fi
 
@@ -2388,8 +3060,15 @@ function auto_install_fish {
     # Create backup before modifying
     if [ -f "$rc_file" ]; then
         local backup_file="${rc_file}.bak.$(date +%Y%m%d%H%M%S)"
-        cp "$rc_file" "$backup_file" 2>/dev/null
-        utils_show_status "info" "Created backup at ${backup_file}"
+        
+        # Validate backup file path
+        if utils_validate_path "$backup_file"; then
+            if cp "$rc_file" "$backup_file" 2>/dev/null; then
+                # Set secure permissions (readable/writable by owner only)
+                chmod 600 "$backup_file" 2>/dev/null
+                utils_show_status "info" "Created secure backup at ${backup_file}"
+            fi
+        fi
     fi
     
     # Add the hook function to the rc file
@@ -2426,8 +3105,12 @@ function phpswitch_auto_detect_project --on-variable PWD
     # If not in cache, check for project file and add to cache
     if test "$cache_hit" = "false"
         # Use a temporary file to avoid permission issues
-        set temp_cache_file (mktemp)
-        
+        set temp_cache_file (mktemp 2>/dev/null)
+        if test -z "$temp_cache_file"; or not test -f "$temp_cache_file"
+            return
+        end
+        chmod 600 "$temp_cache_file" 2>/dev/null
+
         # Copy existing cache if available
         if test -f "$cache_file"; and test -r "$cache_file"
             cat "$cache_file" > "$temp_cache_file" 2>/dev/null
@@ -2442,6 +3125,20 @@ function phpswitch_auto_detect_project --on-variable PWD
                 phpswitch --auto-mode > /dev/null 2>&1
                 
                 # Try to update the main cache file if writable
+                if test -w (dirname "$cache_file")
+                    mv "$temp_cache_file" "$cache_file" 2>/dev/null
+                end
+                return
+            end
+        end
+        
+        # Check for composer.json or .tool-versions using phpswitch helper
+        if test -f "$current_dir/composer.json"; or test -f "$current_dir/.tool-versions"
+            set version (phpswitch --get-project-version 2>/dev/null)
+            if test -n "$version"
+                echo "$current_dir:$version" >> "$temp_cache_file"
+                phpswitch --auto-mode > /dev/null 2>&1
+                
                 if test -w (dirname "$cache_file")
                     mv "$temp_cache_file" "$cache_file" 2>/dev/null
                 end
@@ -2479,8 +3176,8 @@ function auto_clear_directory_cache {
         else
             # Try with sudo if direct removal fails
             utils_show_status "warning" "No write permission for $cache_file"
-            echo -n "Would you like to try with sudo? (y/n): "
-            if [ "$(utils_validate_yes_no "Try with sudo?" "y")" = "y" ]; then
+            printf "  Try with sudo? (y/n) "
+            if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
                 sudo rm -f "$cache_file" 2>/dev/null
                 if [ ! -f "$cache_file" ]; then
                     utils_show_status "success" "Directory cache cleared with sudo"
@@ -2498,25 +3195,44 @@ function auto_clear_directory_cache {
 function auto_switch_php {
     local new_version="$1"
     local brew_version
-    
+
     if [ "$new_version" = "php@default" ]; then
         brew_version="php"
     else
         brew_version="$new_version"
     fi
-    
+
     # Unlink current PHP
-    brew unlink $(core_get_current_php_version) &>/dev/null
-    
+    brew unlink "$(core_get_current_php_version)" &>/dev/null
+
     # Link new PHP
     brew link --force "$brew_version" &>/dev/null
-    
-    # If linking succeeded, return success
-    if [ $? -eq 0 ]; then
-        return 0
-    else
+
+    if [ $? -ne 0 ]; then
         return 1
     fi
+
+    # Silently restart PHP-FPM if enabled
+    if [ "$AUTO_RESTART_PHP_FPM" = "true" ]; then
+        local service_name=$(fpm_get_service_name "$new_version")
+        # Capture once — avoids calling brew services list twice (slow) and eliminates TOCTOU
+        local services_list
+        services_list=$(brew services list 2>/dev/null)
+        local running_services
+        running_services=$(echo "$services_list" | grep -E "^php(@[0-9]\.[0-9])?" | awk '{print $1}')
+        while IFS= read -r service; do
+            [ -z "$service" ] && continue
+            [ "$service" != "$service_name" ] && brew services stop "$service" &>/dev/null
+        done <<< "$running_services"
+        # awk exact field match avoids "php" matching "php@8.1" etc.
+        if echo "$services_list" | awk -v svc="$service_name" '$1 == svc' | grep -q "started"; then
+            brew services restart "$service_name" &>/dev/null
+        else
+            brew services start "$service_name" &>/dev/null
+        fi
+    fi
+
+    return 0
 }
 # Module: commands.sh
 # PHPSwitch Command Line Parsing
@@ -2530,9 +3246,25 @@ function cmd_parse_arguments {
         shift
     fi
     
+    # Print header for all interactive/visible commands
+    local _silent_flag=false
+    case "$1" in
+        --auto-mode|--get-project-version|--version|-v|--help|-h) _silent_flag=true ;;
+    esac
+    if [ "$_silent_flag" = "false" ]; then
+        if [ "$USE_COLORS" = "true" ]; then
+            utils_print_gradient "PHPSwitch  PHP Version Manager for macOS  v$PHPSWITCH_VERSION" \
+                192 132 252 \
+                103 232 249
+            printf "\n\n"
+        else
+            printf "PHPSwitch  PHP Version Manager for macOS  v%s\n\n" "$PHPSWITCH_VERSION"
+        fi
+    fi
+
     # Skip dependency check for basic commands
-    if [ "$1" != "--version" ] && [ "$1" != "-v" ] && 
-       [ "$1" != "--help" ] && [ "$1" != "-h" ] && 
+    if [ "$1" != "--version" ] && [ "$1" != "-v" ] &&
+       [ "$1" != "--help" ] && [ "$1" != "-h" ] &&
        [ "$1" != "--check-dependencies" ] && [ "$1" != "--fix-permissions" ]; then
         # Check dependencies
         utils_check_dependencies || {
@@ -2544,22 +3276,42 @@ function cmd_parse_arguments {
     # Parse command-line arguments for non-interactive mode
     if [[ "$1" == --switch=* ]]; then
         version="${1#*=}"
+        if ! utils_validate_version "$version"; then
+            utils_show_status "error" "Invalid version format: $version"
+            exit 1
+        fi
         cmd_non_interactive_switch "$version" "false"
         exit $?
     elif [[ "$1" == --switch-force=* ]]; then
         version="${1#*=}"
+        if ! utils_validate_version "$version"; then
+            utils_show_status "error" "Invalid version format: $version"
+            exit 1
+        fi
         cmd_non_interactive_switch "$version" "true"
         exit $?
     elif [[ "$1" == --install=* ]]; then
         version="${1#*=}"
+        if ! utils_validate_version "$version"; then
+            utils_show_status "error" "Invalid version format: $version"
+            exit 1
+        fi
         cmd_non_interactive_install "$version"
         exit $?
     elif [[ "$1" == --uninstall=* ]]; then
         version="${1#*=}"
+        if ! utils_validate_version "$version"; then
+            utils_show_status "error" "Invalid version format: $version"
+            exit 1
+        fi
         cmd_non_interactive_uninstall "$version" "false"
         exit $?
     elif [[ "$1" == --uninstall-force=* ]]; then
         version="${1#*=}"
+        if ! utils_validate_version "$version"; then
+            utils_show_status "error" "Invalid version format: $version"
+            exit 1
+        fi
         cmd_non_interactive_uninstall "$version" "true"
         exit $?
     elif [ "$1" = "--list" ]; then
@@ -2583,22 +3335,27 @@ function cmd_parse_arguments {
     elif [ "$1" = "--refresh-cache" ]; then
         utils_show_status "info" "Refreshing PHP versions cache..."
         local cache_dir="$HOME/.cache/phpswitch"
+        # Validate cache directory path
+        if ! utils_validate_path "$cache_dir"; then
+            utils_show_status "error" "Invalid cache directory path"
+            exit 1
+        fi
         mkdir -p "$cache_dir"
         rm -f "$cache_dir/available_versions.cache"
         core_get_available_php_versions > /dev/null
         utils_show_status "success" "PHP versions cache refreshed"
         exit 0
     elif [ "$1" = "--project" ] || [ "$1" = "-p" ]; then
-        if version_check_project > /dev/null; then
-            project_php_version=$(version_check_project)
+        project_php_version=$(version_check_project 2>/dev/null)
+        if [ -n "$project_php_version" ]; then
             utils_show_status "info" "Project PHP version detected: $project_php_version"
             
             if core_check_php_installed "$project_php_version"; then
                 version_switch_php "$project_php_version" "true"
             else
                 utils_show_status "warning" "Project PHP version ($project_php_version) is not installed"
-                echo -n "Would you like to install it? (y/n): "
-                if [ "$(utils_validate_yes_no "Install project PHP version?" "y")" = "y" ]; then
+                printf "  Install it? (y/n) "
+                if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
                     version_switch_php "$project_php_version" "false"
                 fi
             fi
@@ -2607,10 +3364,20 @@ function cmd_parse_arguments {
             utils_show_status "warning" "No project-specific PHP version found"
             exit 1
         fi
+    elif [ "$1" = "--get-project-version" ]; then
+        # Just resolve the project version and print it (used by auto-switch hooks)
+        local _proj_ver
+        _proj_ver=$(version_check_project 2>/dev/null)
+        if [ -n "$_proj_ver" ]; then
+            printf "%s\n" "$_proj_ver"
+            exit 0
+        else
+            exit 1
+        fi
     elif [ "$1" = "--auto-mode" ]; then
         # Special quiet mode for auto-switching - used by shell hooks
-        if version_check_project > /dev/null; then
-            project_php_version=$(version_check_project)
+        project_php_version=$(version_check_project 2>/dev/null)
+        if [ -n "$project_php_version" ]; then
             current_version=$(core_get_current_php_version)
             
             # Only switch if the version is different
@@ -2652,41 +3419,40 @@ function cmd_parse_arguments {
         echo "PHPSwitch version $version"
         exit 0
     elif [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
-        echo "PHPSwitch - PHP Version Manager for macOS"
-        echo "========================================"
-        echo "Usage:"
-        echo "  phpswitch                      - Run the interactive menu to switch PHP versions"
-        echo "  phpswitch --switch=VERSION     - Switch to specified PHP version"
-        echo "  phpswitch --switch-force=VERSION - Switch to PHP version, installing if needed"
-        echo "  phpswitch --install=VERSION    - Install specified PHP version"
-        echo "  phpswitch --uninstall=VERSION  - Uninstall specified PHP version"
-        echo "  phpswitch --uninstall-force=VERSION - Force uninstall specified PHP version"
-        echo "  phpswitch --list               - List installed and available PHP versions"
-        echo "  phpswitch --json               - List PHP versions in JSON format"
-        echo "  phpswitch --current            - Show current PHP version"
-        echo "  phpswitch --project, -p        - Switch to the PHP version specified in project file"
-        echo "  phpswitch --clear-cache        - Clear cached data"
-        echo "  phpswitch --refresh-cache      - Refresh cache of available PHP versions"
-        echo "  phpswitch --fix-permissions    - Fix cache directory permission issues"
-        echo "  phpswitch --install-auto-switch - Enable automatic PHP switching based on directory"
-        echo "  phpswitch --clear-directory-cache - Clear auto-switching directory cache"
-        echo "  phpswitch --check-dependencies - Check system for required dependencies"
-        echo "  phpswitch --install            - Install phpswitch as a system command"
-        echo "  phpswitch --uninstall          - Remove phpswitch from your system"
-        echo "  phpswitch --update             - Check for and install the latest version"
-        echo "  phpswitch --version, -v        - Show phpswitch version"
-        echo "  phpswitch --debug              - Run with debug logging enabled"
-        echo "  phpswitch --help, -h           - Display this help message"
+        printf "\n  PHPSwitch  PHP Version Manager for macOS\n\n"
+        printf "  Usage\n\n"
+        printf "    phpswitch                            interactive menu\n"
+        printf "    phpswitch --switch=VERSION           switch to version\n"
+        printf "    phpswitch --switch-force=VERSION     switch, installing if needed\n"
+        printf "    phpswitch --install=VERSION          install a version\n"
+        printf "    phpswitch --uninstall=VERSION        uninstall a version\n"
+        printf "    phpswitch --uninstall-force=VERSION  force uninstall a version\n"
+        printf "    phpswitch --list                     list installed and available versions\n"
+        printf "    phpswitch --json                     list versions in JSON format\n"
+        printf "    phpswitch --current                  show current version\n"
+        printf "    phpswitch --project, -p              switch to project version\n"
+        printf "    phpswitch --clear-cache              clear cached data\n"
+        printf "    phpswitch --refresh-cache            refresh available versions cache\n"
+        printf "    phpswitch --fix-permissions          fix cache directory permissions\n"
+        printf "    phpswitch --install-auto-switch      enable directory-based auto-switching\n"
+        printf "    phpswitch --clear-directory-cache    clear auto-switching directory cache\n"
+        printf "    phpswitch --check-dependencies       check system dependencies\n"
+        printf "    phpswitch --install                  install as a system command\n"
+        printf "    phpswitch --uninstall                remove from system\n"
+        printf "    phpswitch --update                   update to the latest version\n"
+        printf "    phpswitch --version, -v              show version\n"
+        printf "    phpswitch --debug                    enable debug logging\n"
+        printf "    phpswitch --help, -h                 show this help\n\n"
         exit 0
     else
         # No arguments or debug mode only - show the interactive menu
         current_version=$(core_get_current_php_version)
         
         # If default version is set and current version is different, offer to switch
-        if [ -n "$DEFAULT_PHP_VERSION" ] && [ "$current_version" != "$DEFAULT_PHP_VERSION" ] && [ "$(core_get_current_php_version)" != "$DEFAULT_PHP_VERSION" ]; then
-            echo "Default PHP version ($DEFAULT_PHP_VERSION) is different from current version ($(core_get_current_php_version))"
-            echo -n "Would you like to switch to the default version? (y/n): "
-            if [ "$(utils_validate_yes_no "Switch to default?" "y")" = "y" ]; then
+        if [ -n "$DEFAULT_PHP_VERSION" ] && [ "$current_version" != "$DEFAULT_PHP_VERSION" ]; then
+            printf "  Default version (%s) differs from current (%s)\n" "$DEFAULT_PHP_VERSION" "$current_version"
+            printf "  Switch to default version? (y/n) "
+            if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
                 if core_check_php_installed "$DEFAULT_PHP_VERSION"; then
                     version_switch_php "$DEFAULT_PHP_VERSION" "true"
                     exit 0
@@ -2699,10 +3465,13 @@ function cmd_parse_arguments {
         cmd_show_menu
         
         # Print current PHP version at the end to confirm
-        echo ""
-        utils_show_status "info" "Current PHP configuration:"
-        echo ""
-        php -v
+        if [ "$USE_COLORS" = "true" ]; then
+            printf "\n  "; utils_print_gradient "Active version" 148 182 251 125 207 250; printf "\n\n"
+        else
+            printf "\n  Active version\n\n"
+        fi
+        php -v | sed 's/^/    /'
+        printf "\n"
     fi
 }
 
@@ -2722,13 +3491,13 @@ function cmd_non_interactive_switch {
             version="php@default"
         else
             utils_show_status "error" "Invalid PHP version format: $version"
-            echo "Use either 'X.Y' format (e.g., 8.1) or 'php@X.Y' format (e.g., php@8.1)"
+            printf "  Use either 'X.Y' format (e.g., 8.1) or 'php@X.Y' format (e.g., php@8.1)\n"
             return 1
         fi
     elif [ "$version" = "default" ]; then
         version="php@default"
     fi
-    
+
     # Check if the requested version is installed
     if core_check_php_installed "$version"; then
         is_installed=true
@@ -2736,8 +3505,8 @@ function cmd_non_interactive_switch {
         is_installed=false
         if [ "$force" != "true" ]; then
             utils_show_status "error" "PHP version $version is not installed"
-            echo "Use --force to install it automatically, or install it first with:"
-            echo "phpswitch --install=$version"
+            printf "  Use --force to install it automatically, or install it first with:\n"
+            printf "    phpswitch --install=%s\n" "$version"
             return 1
         fi
     fi
@@ -2762,13 +3531,13 @@ function cmd_non_interactive_install {
             version="php@default"
         else
             utils_show_status "error" "Invalid PHP version format: $version"
-            echo "Use either 'X.Y' format (e.g., 8.1) or 'php@X.Y' format (e.g., php@8.1)"
+            printf "  Use either 'X.Y' format (e.g., 8.1) or 'php@X.Y' format (e.g., php@8.1)\n"
             return 1
         fi
     elif [ "$version" = "default" ]; then
         version="php@default"
     fi
-    
+
     # Check if already installed
     if core_check_php_installed "$version"; then
         utils_show_status "info" "PHP version $version is already installed"
@@ -2796,13 +3565,13 @@ function cmd_non_interactive_uninstall {
             version="php@default"
         else
             utils_show_status "error" "Invalid PHP version format: $version"
-            echo "Use either 'X.Y' format (e.g., 8.1) or 'php@X.Y' format (e.g., php@8.1)"
+            printf "  Use either 'X.Y' format (e.g., 8.1) or 'php@X.Y' format (e.g., php@8.1)\n"
             return 1
         fi
     elif [ "$version" = "default" ]; then
         version="php@default"
     fi
-    
+
     # Check if the version is installed
     if ! core_check_php_installed "$version"; then
         utils_show_status "error" "PHP version $version is not installed"
@@ -2825,19 +3594,16 @@ function cmd_non_interactive_uninstall {
 function cmd_list_php_versions {
     local format="$1"
     
-    echo "Installed PHP versions:"
-    echo "======================"
+    printf "\n  Installed\n\n"
     while read -r version; do
         if [ "$version" = "$(core_get_current_php_version)" ]; then
-            echo "$version (current)"
+            printf "    %s  (active)\n" "$version"
         else
-            echo "$version"
+            printf "    %s\n" "$version"
         fi
     done < <(core_get_installed_php_versions)
-    
-    echo ""
-    echo "Available PHP versions:"
-    echo "======================"
+
+    printf "\n  Available to install\n\n"
     
     # Get installed versions as an array for comparison
     local installed_versions=()
@@ -2857,16 +3623,13 @@ function cmd_list_php_versions {
         done
         
         if [ "$is_installed" = "false" ]; then
-            echo "$version (not installed)"
+            printf "    %s\n" "$version"
         fi
     done < <(core_get_available_php_versions)
     
     if [ "$format" = "json" ]; then
         # Provide JSON format for scripting
-        echo ""
-        echo "JSON format:"
-        echo "============"
-        
+        printf "\n  JSON Format\n\n"
         echo "{"
         echo "  \"current\": \"$(core_get_current_php_version)\","
         echo "  \"installed\": ["
@@ -2923,7 +3686,7 @@ function cmd_fix_permissions {
     else
         # If script not found in the expected location, try to create a temporary one
         utils_show_status "warning" "Fix permissions script not found at $fix_script"
-        echo "Creating a temporary permissions fix script..."
+        printf "  Creating a temporary permissions fix script...\n"
         
         local temp_script=$(mktemp)
         cat > "$temp_script" << 'EOL'
@@ -2933,68 +3696,73 @@ function cmd_fix_permissions {
 CACHE_DIR="$HOME/.cache/phpswitch"
 ALT_CACHE_DIR="$HOME/.phpswitch_cache"
 CONFIG_FILE="$HOME/.phpswitch.conf"
-USERNAME=$(whoami)
+# Get secure username with validation
+USERNAME=$(id -un)
+# Validate username to prevent command injection
+if [[ ! "$USERNAME" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+    echo "Error: Invalid username detected. Exiting for security."
+    return 1
+fi
 
-echo "PHPSwitch Permission Fix Tool"
-echo "============================"
-echo ""
+printf "\n  PHPSwitch Permission Fix Tool\n\n"
 
 # Try to fix permissions on standard cache directory
 if [ -d "$CACHE_DIR" ]; then
-    echo "Fixing permissions for: $CACHE_DIR"
-    
+    printf "  Fixing permissions for: %s\n" "$CACHE_DIR"
+
     # Method 1: Standard chmod
     chmod -v u+w "$CACHE_DIR" 2>/dev/null
-    
+
     if [ -w "$CACHE_DIR" ]; then
-        echo "✅ Permissions fixed successfully!"
+        printf "  Permissions fixed\n"
         exit 0
     fi
-    
+
     # Method 2: Sudo chmod
-    echo "Trying with sudo..."
+    printf "  Trying with sudo...\n"
     sudo chmod -v u+w "$CACHE_DIR" 2>/dev/null
-    
+
     if [ -w "$CACHE_DIR" ]; then
-        echo "✅ Permissions fixed successfully with sudo!"
+        printf "  Permissions fixed with sudo\n"
         exit 0
     fi
-    
+
     # Method 3: Change ownership
-    echo "Trying to change ownership..."
+    printf "  Trying to change ownership...\n"
     sudo chown -v "$USERNAME" "$CACHE_DIR" 2>/dev/null
-    
+
     if [ -w "$CACHE_DIR" ]; then
-        echo "✅ Ownership changed, directory is now writable!"
+        printf "  Ownership changed, directory is now writable\n"
         exit 0
     fi
-    
+
     # Method 4: Recreate directory
-    echo "Recreating directory..."
+    printf "  Recreating directory...\n"
     sudo rm -rf "$CACHE_DIR" 2>/dev/null
     mkdir -p "$CACHE_DIR" 2>/dev/null
-    
+
     if [ -d "$CACHE_DIR" ] && [ -w "$CACHE_DIR" ]; then
-        echo "✅ Directory successfully recreated!"
+        printf "  Directory successfully recreated\n"
         exit 0
     fi
 fi
 
 # Use alternative directory in home folder
-echo "Creating alternative cache directory: $ALT_CACHE_DIR"
+printf "  Creating alternative cache directory: %s\n" "$ALT_CACHE_DIR"
 mkdir -p "$ALT_CACHE_DIR" 2>/dev/null
 
 if [ -d "$ALT_CACHE_DIR" ] && [ -w "$ALT_CACHE_DIR" ]; then
-    echo "✅ Alternative directory created successfully!"
+    printf "  Alternative directory created\n"
     
     # Update configuration
     if [ -f "$CONFIG_FILE" ]; then
-        if grep -q "CACHE_DIRECTORY=" "$CONFIG_FILE"; then
-            sed -i.bak "s|CACHE_DIRECTORY=.*|CACHE_DIRECTORY=\"$ALT_CACHE_DIR\"|g" "$CONFIG_FILE"
-            rm -f "$CONFIG_FILE.bak" 2>/dev/null
-        else
-            echo "CACHE_DIRECTORY=\"$ALT_CACHE_DIR\"" >> "$CONFIG_FILE"
-        fi
+        # Inline awk (utils_set_config_value unavailable in this embedded script)
+        KEY=CACHE_DIRECTORY VALUE="$ALT_CACHE_DIR" awk '
+            BEGIN{k=ENVIRON["KEY"];v=ENVIRON["VALUE"];found=0}
+            $0 ~ ("^" k "="){print k "=\"" v "\"";found=1;next}
+            {print}
+            END{if(!found)print k "=\"" v "\""}
+        ' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
     else
         cat > "$CONFIG_FILE" << CONF
 # PHPSwitch Configuration
@@ -3006,24 +3774,33 @@ AUTO_SWITCH_PHP_VERSION=false
 CACHE_DIRECTORY="$ALT_CACHE_DIR"
 CONF
     fi
-    echo "✅ Configuration updated to use alternative cache directory!"
+    printf "  Configuration updated to use alternative cache directory\n"
     exit 0
 else
-    echo "❌ Failed to create alternative directory!"
-    
+    printf "  warn: Failed to create alternative directory\n"
+
     # Last resort: use temporary directory
-    TMP_DIR="/tmp/phpswitch_cache_$(whoami)"
+    # Create secure temporary directory name
+    local secure_username
+    secure_username="$(id -un)"
+    if [[ "$secure_username" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        TMP_DIR="/tmp/phpswitch_cache_$secure_username"
+    else
+        echo "Error: Invalid username for temporary directory"
+        exit 1
+    fi
     echo "Using temporary directory as last resort: $TMP_DIR"
     mkdir -p "$TMP_DIR" 2>/dev/null
-    
+
     if [ -d "$TMP_DIR" ] && [ -w "$TMP_DIR" ]; then
         if [ -f "$CONFIG_FILE" ]; then
-            if grep -q "CACHE_DIRECTORY=" "$CONFIG_FILE"; then
-                sed -i.bak "s|CACHE_DIRECTORY=.*|CACHE_DIRECTORY=\"$TMP_DIR\"|g" "$CONFIG_FILE"
-                rm -f "$CONFIG_FILE.bak" 2>/dev/null
-            else
-                echo "CACHE_DIRECTORY=\"$TMP_DIR\"" >> "$CONFIG_FILE"
-            fi
+            # Inline awk (utils_set_config_value unavailable in this embedded script)
+            KEY=CACHE_DIRECTORY VALUE="$TMP_DIR" awk '
+                BEGIN{k=ENVIRON["KEY"];v=ENVIRON["VALUE"];found=0}
+                $0 ~ ("^" k "="){print k "=\"" v "\"";found=1;next}
+                {print}
+                END{if(!found)print k "=\"" v "\""}
+            ' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
         else
             cat > "$CONFIG_FILE" << CONF
 # PHPSwitch Configuration
@@ -3035,13 +3812,13 @@ AUTO_SWITCH_PHP_VERSION=false
 CACHE_DIRECTORY="$TMP_DIR"
 CONF
         fi
-        echo "✅ Configuration updated to use temporary directory!"
-        echo "⚠️  Note: Cache will be cleared on system reboot"
+        printf "  Configuration updated to use temporary directory\n"
+        printf "  warn: Cache will be cleared on system reboot\n"
         exit 0
     fi
-    
-    echo "❌ All attempts to fix permissions failed!"
-    echo "Please manually create a config file at $CONFIG_FILE and set CACHE_DIRECTORY to a writable location."
+
+    printf "  error: All attempts to fix permissions failed\n"
+    printf "  Manually create a config file at %s and set CACHE_DIRECTORY to a writable location.\n" "$CONFIG_FILE"
     exit 1
 fi
 EOL
@@ -3059,8 +3836,8 @@ function cmd_clear_phpswitch_cache {
     local cache_dir=$(core_get_cache_dir)
     
     if [ -d "$cache_dir" ]; then
-        echo -n "Are you sure you want to clear phpswitch cache? (y/n): "
-        if [ "$(utils_validate_yes_no "Clear cache?" "y")" = "y" ]; then
+        printf "  Clear phpswitch cache? (y/n) "
+        if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
             core_clear_cache
             utils_show_status "success" "Cleared phpswitch cache from $cache_dir"
         else
@@ -3119,12 +3896,12 @@ function cmd_uninstall_command {
     
     utils_show_status "info" "Found phpswitch installed at:"
     for location in "${installed_locations[@]}"; do
-        echo "  - $location"
+        printf "    - %s\n" "$location"
     done
     
-    echo -n "Are you sure you want to uninstall phpswitch? (y/n): "
-    
-    if [ "$(utils_validate_yes_no "Uninstall phpswitch?" "n")" = "y" ]; then
+    printf "  Uninstall phpswitch? (y/n) "
+
+    if [ "$(utils_validate_yes_no "" "n")" = "y" ]; then
         for location in "${installed_locations[@]}"; do
             utils_show_status "info" "Removing $location..."
             sudo rm "$location"
@@ -3132,8 +3909,8 @@ function cmd_uninstall_command {
         
         # Ask about config file
         if [ -f "$HOME/.phpswitch.conf" ]; then
-            echo -n "Would you like to remove the configuration file ~/.phpswitch.conf as well? (y/n): "
-            if [ "$(utils_validate_yes_no "Remove config?" "n")" = "y" ]; then
+            printf "  Remove the configuration file ~/.phpswitch.conf? (y/n) "
+            if [ "$(utils_validate_yes_no "" "n")" = "y" ]; then
                 rm "$HOME/.phpswitch.conf"
                 utils_show_status "success" "Configuration file removed"
             fi
@@ -3142,8 +3919,8 @@ function cmd_uninstall_command {
         # Ask about cache directory
         local cache_dir="$HOME/.cache/phpswitch"
         if [ -d "$cache_dir" ]; then
-            echo -n "Would you like to remove the cache directory as well? (y/n): "
-            if [ "$(utils_validate_yes_no "Remove cache?" "n")" = "y" ]; then
+            printf "  Remove the cache directory? (y/n) "
+            if [ "$(utils_validate_yes_no "" "n")" = "y" ]; then
                 rm -rf "$cache_dir"
                 utils_show_status "success" "Cache directory removed"
             fi
@@ -3160,7 +3937,8 @@ function cmd_update_self {
     utils_show_status "info" "Checking for updates..."
     
     # Create a temporary directory
-    local tmp_dir=$(mktemp -d)
+    local tmp_dir
+    tmp_dir=$(mktemp -d 2>/dev/null) || { utils_show_status "error" "Failed to create temp directory for update"; return 1; }
     
     # Try to download the latest version from GitHub
     if curl -s -L "https://raw.githubusercontent.com/NavanithanS/phpswitch/master/php-switcher.sh" -o "$tmp_dir/php-switcher.sh"; then
@@ -3174,9 +3952,9 @@ function cmd_update_self {
             
             if [ -n "$new_version" ] && [ -n "$current_version" ] && [ "$new_version" != "$current_version" ]; then
                 utils_show_status "info" "New version available: $new_version (current: $current_version)"
-                echo -n "Would you like to update? (y/n): "
-                
-                if [ "$(utils_validate_yes_no "Update?" "y")" = "y" ]; then
+                printf "  Update to %s? (y/n) " "$new_version"
+
+                if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
                     # Find the current script's location
                     local script_path=$(which phpswitch 2>/dev/null || echo "$0")
                     
@@ -3206,7 +3984,7 @@ function cmd_update_self {
                     fi
                     
                     utils_show_status "success" "Updated to version $new_version"
-                    echo "Please restart phpswitch to use the new version."
+                    printf "  Please restart phpswitch to use the new version.\n"
                     
                     # Clean up
                     rm -rf "$tmp_dir"
@@ -3230,26 +4008,60 @@ function cmd_update_self {
 
 # Function to show the main menu
 function cmd_show_menu {
-    echo "PHPSwitch - PHP Version Manager for macOS"
-    echo "========================================"
-    
-    # Check for project-specific PHP version
+    # Start fetching available PHP versions in the background immediately
+    available_versions_file=$(mktemp)
+    core_get_available_php_versions > "$available_versions_file" &
+
+    # Get current and active PHP versions
+    current_version=$(core_get_current_php_version)
+    active_version=$(core_get_active_php_version)
+
+    # Check for project-specific PHP version (single call)
     local project_php_version=""
-    if version_check_project > /dev/null; then
-        project_php_version=$(version_check_project)
-        utils_show_status "info" "Project PHP version detected: $project_php_version"
-        
-        # Offer to switch to project PHP version
-        if [ "$(core_get_current_php_version)" != "$project_php_version" ]; then
-            echo -n "Switch to project-specific PHP version? (y/n): "
-            if [ "$(utils_validate_yes_no "Switch to project version?" "y")" = "y" ]; then
+    project_php_version=$(version_check_project 2>/dev/null)
+
+    printf "\n"
+
+    # Current version line
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "  "; utils_print_gradient "Current" 192 132 252 170 157 251; printf "  \033[36m%s\033[0m" "$current_version"
+    else
+        printf "  Current  %s" "$current_version"
+    fi
+    if [ "$active_version" != "none" ]; then
+        if [ "$USE_COLORS" = "true" ]; then
+            printf "  \033[2m(%s)\033[0m" "$active_version"
+        else
+            printf "  (%s)" "$active_version"
+        fi
+        if [[ "$current_version" == php@* ]] && [[ "$active_version" != *$(echo "$current_version" | grep -o "[0-9]\.[0-9]")* ]]; then
+            if [ "$USE_COLORS" = "true" ]; then
+                printf "  \033[33mmismatch\033[0m"
+            else
+                printf "  mismatch"
+            fi
+        fi
+    fi
+    printf "\n"
+
+    # Project version line (only when a project version is detected)
+    if [ -n "$project_php_version" ]; then
+        if [ "$USE_COLORS" = "true" ]; then
+            printf "  "; utils_print_gradient "Project" 170 157 251 148 182 251; printf "  %s\n" "$project_php_version"
+        else
+            printf "  Project  %s\n" "$project_php_version"
+        fi
+        # Offer to switch if project version differs from current
+        if [ "$current_version" != "$project_php_version" ]; then
+            printf "\n  Switch to project version? (y/n) "
+            if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
                 if core_check_php_installed "$project_php_version"; then
                     version_switch_php "$project_php_version" "true"
                     return $?
                 else
-                    utils_show_status "warning" "Project PHP version ($project_php_version) is not installed"
-                    echo -n "Would you like to install it? (y/n): "
-                    if [ "$(utils_validate_yes_no "Install project PHP version?" "y")" = "y" ]; then
+                    utils_show_status "warning" "Project version ($project_php_version) is not installed"
+                    printf "  Install it? (y/n) "
+                    if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
                         version_switch_php "$project_php_version" "false"
                         return $?
                     fi
@@ -3257,100 +4069,124 @@ function cmd_show_menu {
             fi
         fi
     fi
-    
-    # Start fetching available PHP versions in the background immediately
-    available_versions_file=$(mktemp)
-    core_get_available_php_versions > "$available_versions_file" &
-    
-    # Get current PHP version
-    current_version=$(core_get_current_php_version)
-    utils_show_status "info" "Current PHP version: $current_version"
-    
-    # Show actual PHP version being used currently (may differ from Homebrew's linked version)
-    active_version=$(core_get_active_php_version)
-    if [ "$active_version" != "none" ]; then
-        php_path=$(which php)
-        if [ -L "$php_path" ]; then
-            # If it's a symlink, show what it points to
-            real_path=$(readlink "$php_path")
-            utils_show_status "info" "Active PHP is: $active_version (symlinked from $real_path)"
-        else
-            utils_show_status "info" "Active PHP is: $active_version (from $php_path)"
-        fi
-        
-        # Alert if there's a mismatch
-        if [[ $current_version == php@* ]] && [[ $active_version != *$(echo "$current_version" | grep -o "[0-9]\.[0-9]")* ]]; then
-            utils_show_status "warning" "Version mismatch: Active PHP ($active_version) does not match Homebrew-linked version"
-        fi
+    printf "\n"
+
+    # Installed versions section
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "  "; utils_print_gradient "Installed" 148 182 251 125 207 250; printf "\n"
+    else
+        printf "  Installed\n"
     fi
-    
-    echo ""
-    echo "Installed PHP versions:"
-    
+
     local i=1
     local versions=()
-    
+
     # Get all installed PHP versions from Homebrew
     while read -r version; do
         versions+=("$version")
         if [ "$version" = "$current_version" ]; then
-            echo "$i) $version (current)"
+            if [ "$USE_COLORS" = "true" ]; then
+                printf "    \033[1m%s\033[0m  %s  \033[32mactive\033[0m\n" "$i" "$version"
+            else
+                printf "    %s  %s  active\n" "$i" "$version"
+            fi
         else
-            echo "$i) $version"
+            printf "    %s  %s\n" "$i" "$version"
         fi
         ((i++))
     done < <(core_get_installed_php_versions)
-    
+
     if [ ${#versions[@]} -eq 0 ]; then
-        utils_show_status "warning" "No PHP versions found installed via Homebrew"
-        echo "Let's check available PHP versions to install..."
+        if [ "$USE_COLORS" = "true" ]; then
+            printf "    \033[2mNone found via Homebrew\033[0m\n"
+        else
+            printf "    None found via Homebrew\n"
+        fi
     fi
-    
-    echo ""
-    utils_show_status "info" "Checking for available PHP versions to install..."
-    
-    # Wait for background fetch to complete 
+
+    printf "\n"
+
+    # Wait for background fetch to complete
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "  \033[2mChecking available versions...\033[0m"
+    else
+        printf "  Checking available versions..."
+    fi
     wait
-    
-    echo "Available PHP versions to install:"
-    
+    printf "\r\033[2K"
+
+    # Available versions section
     local available_versions=()
-    
+
     while read -r version; do
-        # Check if this version is already installed
         if ! echo "${versions[@]}" | grep -q "$version"; then
             available_versions+=("$version")
-            echo "$i) $version (not installed)"
-            ((i++))
         fi
     done < "$available_versions_file"
-    
+
     rm -f "$available_versions_file"
-    
+
+    if [ ${#available_versions[@]} -gt 0 ]; then
+        if [ "$USE_COLORS" = "true" ]; then
+            printf "  "; utils_print_gradient "Available to install" 125 207 250 103 232 249; printf "\n"
+        else
+            printf "  Available to install\n"
+        fi
+
+        for version in "${available_versions[@]}"; do
+            if [ "$USE_COLORS" = "true" ]; then
+                printf "    %s  %s  \033[2mnot installed\033[0m\n" "$i" "$version"
+            else
+                printf "    %s  %s\n" "$i" "$version"
+            fi
+            ((i++))
+        done
+        printf "\n"
+    fi
+
     if [ ${#versions[@]} -eq 0 ] && [ ${#available_versions[@]} -eq 0 ]; then
-        utils_show_status "error" "No PHP versions found available via Homebrew"
+        utils_show_status "error" "No PHP versions found via Homebrew"
         exit 1
     fi
-    
+
     local max_option=$((i-1))
-    
-    echo ""
-    echo "u) Uninstall a PHP version"
-    echo "e) Manage PHP extensions"
-    echo "c) Configure PHPSwitch"
-    echo "d) Diagnose PHP environment"
-    echo "p) Set current PHP version as project default"
-    echo "a) Configure auto-switching for PHP versions"
-    echo "0) Exit without changes"
-    echo ""
-    echo -n "Please select PHP version to use (0-$max_option, u, e, c, d, p, a): "
-    
+
+    # Options
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "  "; utils_print_gradient "Options" 103 232 249 85 245 248; printf "\n"
+        printf "    \033[1mu\033[0m  uninstall a version\n"
+        printf "    \033[1me\033[0m  manage extensions\n"
+        printf "    \033[1mc\033[0m  configure\n"
+        printf "    \033[1md\033[0m  diagnose\n"
+        printf "    \033[1mp\033[0m  set project default\n"
+        printf "    \033[1ma\033[0m  auto-switch settings\n"
+        printf "    \033[1m0\033[0m  exit\n"
+    else
+        printf "  Options\n"
+        printf "    u  uninstall a version\n"
+        printf "    e  manage extensions\n"
+        printf "    c  configure\n"
+        printf "    d  diagnose\n"
+        printf "    p  set project default\n"
+        printf "    a  auto-switch settings\n"
+        printf "    0  exit\n"
+    fi
+
+    printf "\n"
+
+    # Prompt
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "  "; utils_print_gradient "Select (0-$max_option, u, e, c, d, p, a)" 148 182 251 125 207 250; printf " › "
+    else
+        printf "  Select (0-%s, u, e, c, d, p, a) " "$max_option"
+    fi
+
     local selection
     local valid_selection=false
-    
+
     while [ "$valid_selection" = "false" ]; do
         read -r selection
-        
+
         if [ "$selection" = "0" ]; then
             utils_show_status "info" "Exiting without changes"
             exit 0
@@ -3379,8 +4215,7 @@ function cmd_show_menu {
             valid_selection=true
             utils_diagnose_path_issues
             # Return to main menu after diagnostics
-            echo ""
-            echo -n "Press Enter to continue..."
+            printf "\n  Press Enter to continue..."
             read -r
             cmd_show_menu
             return $?
@@ -3412,48 +4247,46 @@ function cmd_show_menu {
                 selected_version="${available_versions[$available_index]}"
                 selected_is_installed=false
             fi
-            utils_show_status "info" "You selected: $selected_version"
+            utils_show_status "info" "Switching to $selected_version..."
             version_switch_php "$selected_version" "$selected_is_installed"
             return $?
         else
-            echo -n "Invalid selection. Please enter a number between 0 and $max_option, or 'u', 'e', 'c', 'd', 'p', 'a': "
+            printf "  Invalid selection. Try again "
         fi
     done
 }
 
 # Function to configure auto-switching
 function cmd_configure_auto_switch {
-    echo "Auto-switching Configuration"
-    echo "============================"
-    echo ""
-    echo "Auto-switching allows PHPSwitch to automatically change PHP versions when"
-    echo "you enter a directory containing a .php-version file."
-    echo ""
-    
+    printf "\n  Auto-switch Configuration\n\n"
+    printf "  Automatically change PHP versions when entering a directory\n"
+    printf "  containing a .php-version, composer.json, or .tool-versions file.\n\n"
+
     # Check if auto-switching is enabled
     if [ "$AUTO_SWITCH_PHP_VERSION" = "true" ]; then
-        utils_show_status "info" "Auto-switching is currently ENABLED"
-        
-        echo -n "Would you like to disable auto-switching? (y/n): "
-        if [ "$(utils_validate_yes_no "Disable auto-switching?" "n")" = "y" ]; then
+        utils_show_status "info" "Auto-switching is currently enabled"
+
+        printf "  Disable auto-switching? (y/n) "
+        if [ "$(utils_validate_yes_no "" "n")" = "y" ]; then
             # Update config file
-            sed -i.bak "s/AUTO_SWITCH_PHP_VERSION=.*/AUTO_SWITCH_PHP_VERSION=false/" "$HOME/.phpswitch.conf"
-            rm -f "$HOME/.phpswitch.conf.bak"
+            if [ -f "$HOME/.phpswitch.conf" ]; then
+                utils_set_config_value "AUTO_SWITCH_PHP_VERSION" "false" "$HOME/.phpswitch.conf"
+            fi
             
-            utils_show_status "success" "Auto-switching has been disabled"
-            echo "This change will take effect the next time you open a new terminal window."
+            utils_show_status "success" "Auto-switching disabled"
+            printf "  This change takes effect the next time you open a new terminal.\n"
         else
             # Offer to clear directory cache
-            echo -n "Would you like to clear the directory cache? (y/n): "
-            if [ "$(utils_validate_yes_no "Clear directory cache?" "n")" = "y" ]; then
+            printf "  Clear the directory cache? (y/n) "
+            if [ "$(utils_validate_yes_no "" "n")" = "y" ]; then
                 auto_clear_directory_cache
             fi
         fi
     else
-        utils_show_status "info" "Auto-switching is currently DISABLED"
-        
-        echo -n "Would you like to enable auto-switching? (y/n): "
-        if [ "$(utils_validate_yes_no "Enable auto-switching?" "y")" = "y" ]; then
+        utils_show_status "info" "Auto-switching is currently disabled"
+
+        printf "  Enable auto-switching? (y/n) "
+        if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
             auto_install
         fi
     fi
@@ -3461,57 +4294,69 @@ function cmd_configure_auto_switch {
 
 # Function to show uninstall menu
 function cmd_show_uninstall_menu {
-    echo "PHP Version Uninstaller"
-    echo "======================="
-    
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "Uninstall PHP Version" 192 132 252 103 232 249; printf "\n\n"
+    else
+        printf "\n  Uninstall PHP Version\n\n"
+    fi
+
     # Get current PHP version
     current_version=$(core_get_current_php_version)
-    utils_show_status "info" "Current PHP version: $current_version"
-    echo ""
-    
-    echo "Installed PHP versions:"
-    
+
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "  "; utils_print_gradient "Installed" 148 182 251 125 207 250; printf "\n"
+    else
+        printf "  Installed\n"
+    fi
+
     local i=1
     local versions=()
-    
+
     # Get all installed PHP versions from Homebrew
     while read -r version; do
         versions+=("$version")
         if [ "$version" = "$current_version" ]; then
-            echo "$i) $version (current)"
+            if [ "$USE_COLORS" = "true" ]; then
+                printf "    \033[1m%s\033[0m  %s  \033[32mactive\033[0m\n" "$i" "$version"
+            else
+                printf "    %s  %s  active\n" "$i" "$version"
+            fi
         else
-            echo "$i) $version"
+            printf "    %s  %s\n" "$i" "$version"
         fi
         ((i++))
     done < <(core_get_installed_php_versions)
-    
+
     if [ ${#versions[@]} -eq 0 ]; then
         utils_show_status "error" "No PHP versions found installed via Homebrew"
         return 1
     fi
-    
+
     local max_option=$((i-1))
-    
-    echo ""
-    echo "0) Return to main menu"
-    echo ""
-    echo -n "Please select PHP version to uninstall (0-$max_option): "
-    
+
+    printf "\n    0  back to main menu\n\n"
+
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "  "; utils_print_gradient "Select version to uninstall (0-$max_option)" 148 182 251 125 207 250; printf " › "
+    else
+        printf "  Select version to uninstall (0-%s) " "$max_option"
+    fi
+
     local selection
     local valid_selection=false
-    
+
     while [ "$valid_selection" = "false" ]; do
         read -r selection
-        
+
         if [ "$selection" = "0" ]; then
             return 1
         elif utils_validate_numeric_input "$selection" 1 $max_option; then
             valid_selection=true
             selected_version="${versions[$((selection-1))]}"
-            utils_show_status "info" "You selected to uninstall: $selected_version"
+            utils_show_status "info" "Uninstalling $selected_version..."
             
             # Uninstall the selected PHP version
-            uninstall_status=$(version_uninstall_php "$selected_version")
+            version_uninstall_php "$selected_version"
             uninstall_status=$?
             
             if [ $uninstall_status -eq 2 ]; then
@@ -3526,15 +4371,18 @@ function cmd_show_uninstall_menu {
                 return 1
             fi
         else
-            echo -n "Invalid selection. Please enter a number between 0 and $max_option: "
+            printf "  Invalid selection. Try again "
         fi
     done
 }
 
 # Function to configure PHPSwitch
 function cmd_configure_phpswitch {
-    echo "PHPSwitch Configuration"
-    echo "======================="
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "PHPSwitch Configuration" 192 132 252 103 232 249; printf "\n\n"
+    else
+        printf "\n  PHPSwitch Configuration\n\n"
+    fi
     
     # Create config file if it doesn't exist
     if [ ! -f "$HOME/.phpswitch.conf" ]; then
@@ -3544,38 +4392,46 @@ function cmd_configure_phpswitch {
     # Load current config
     core_load_config
     
-    echo "Current Configuration:"
-    echo "1) Auto restart PHP-FPM: $AUTO_RESTART_PHP_FPM"
-    echo "2) Backup config files: $BACKUP_CONFIG_FILES"
-    echo "3) Maximum backups to keep: ${MAX_BACKUPS:-5}"
-    echo "4) Default PHP version: ${DEFAULT_PHP_VERSION:-None}"
-    echo "5) Auto-switching PHP versions: $AUTO_SWITCH_PHP_VERSION"
-    echo "0) Return to main menu"
-    echo ""
-    echo -n "Select setting to change (0-5): "
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "  "; utils_print_gradient "Current settings" 192 132 252 170 157 251; printf "\n"
+    else
+        printf "  Current settings\n"
+    fi
+    printf "    1  auto restart PHP-FPM    %s\n" "$AUTO_RESTART_PHP_FPM"
+    printf "    2  backup config files     %s\n" "$BACKUP_CONFIG_FILES"
+    printf "    3  max backups             %s\n" "${MAX_BACKUPS:-5}"
+    printf "    4  default PHP version     %s\n" "${DEFAULT_PHP_VERSION:-none}"
+    printf "    5  auto-switching          %s\n" "$AUTO_SWITCH_PHP_VERSION"
+    printf "    0  back to main menu\n\n"
+
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "  "; utils_print_gradient "Select setting to change (0-5)" 148 182 251 125 207 250; printf " › "
+    else
+        printf "  Select setting to change (0-5) "
+    fi
     
     local option
     read -r option
     
     case $option in
         1)
-            echo -n "Auto restart PHP-FPM when switching versions? (y/n): "
-            if [ "$(utils_validate_yes_no "Auto restart?" "$AUTO_RESTART_PHP_FPM")" = "y" ]; then
+            printf "  Auto restart PHP-FPM when switching? (y/n) "
+            if [ "$(utils_validate_yes_no "" "$AUTO_RESTART_PHP_FPM")" = "y" ]; then
                 AUTO_RESTART_PHP_FPM=true
             else
                 AUTO_RESTART_PHP_FPM=false
             fi
             ;;
         2)
-            echo -n "Create backups of configuration files before modifying? (y/n): "
-            if [ "$(utils_validate_yes_no "Backup files?" "$BACKUP_CONFIG_FILES")" = "y" ]; then
+            printf "  Create backups of config files before modifying? (y/n) "
+            if [ "$(utils_validate_yes_no "" "$BACKUP_CONFIG_FILES")" = "y" ]; then
                 BACKUP_CONFIG_FILES=true
             else
                 BACKUP_CONFIG_FILES=false
             fi
             ;;
         3)
-            echo -n "Enter maximum number of backups to keep (1-20): "
+            printf "  Maximum number of backups to keep (1-20) "
             read -r max_backups
             if [[ "$max_backups" =~ ^[0-9]+$ ]] && [ "$max_backups" -ge 1 ] && [ "$max_backups" -le 20 ]; then
                 MAX_BACKUPS="$max_backups"
@@ -3585,22 +4441,22 @@ function cmd_configure_phpswitch {
             fi
             ;;
         4)
-            echo "Available PHP versions:"
+            printf "  Available PHP versions:\n\n"
             local i=1
             local versions=()
-            
+
             # Add "None" option
-            echo "$i) None"
+            printf "    %s  none\n" "$i"
             ((i++))
-            
+
             # Get all installed PHP versions
             while read -r version; do
                 versions+=("$version")
-                echo "$i) $version"
+                printf "    %s  %s\n" "$i" "$version"
                 ((i++))
             done < <(core_get_installed_php_versions)
-            
-            echo -n "Select default PHP version (1-$i): "
+
+            printf "\n  Select default PHP version (1-%s) " "$i"
             local ver_selection
             read -r ver_selection
             
@@ -3615,8 +4471,8 @@ function cmd_configure_phpswitch {
             fi
             ;;
         5)
-            echo -n "Enable automatic PHP version switching based on directory? (y/n): "
-            if [ "$(utils_validate_yes_no "Enable auto-switching?" "$AUTO_SWITCH_PHP_VERSION")" = "y" ]; then
+            printf "  Enable automatic PHP switching based on directory? (y/n) "
+            if [ "$(utils_validate_yes_no "" "$AUTO_SWITCH_PHP_VERSION")" = "y" ]; then
                 AUTO_SWITCH_PHP_VERSION=true
                 
                 # Ask to set up hooks if not already done
@@ -3646,12 +4502,12 @@ function cmd_configure_phpswitch {
                 esac
                 
                 if [ "$hook_exists" = "false" ]; then
-                    echo -n "Would you like to install the shell hooks for auto-switching? (y/n): "
-                    if [ "$(utils_validate_yes_no "Install shell hooks?" "y")" = "y" ]; then
+                    printf "  Install shell hooks for auto-switching? (y/n) "
+                    if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
                         cmd_configure_auto_switch
                     else
                         utils_show_status "warning" "Auto-switching is enabled but shell hooks are not installed"
-                        echo "Run 'phpswitch --install-auto-switch' to install the hooks later."
+                        printf "  Run 'phpswitch --install-auto-switch' to install the hooks later.\n"
                     fi
                 fi
             else
@@ -3677,10 +4533,10 @@ AUTO_SWITCH_PHP_VERSION=$AUTO_SWITCH_PHP_VERSION
 EOL
     
     utils_show_status "success" "Configuration updated"
-    
+
     # Offer to return to configuration menu
-    echo -n "Would you like to make additional configuration changes? (y/n): "
-    if [ "$(utils_validate_yes_no "More changes?" "y")" = "y" ]; then
+    printf "  Make additional configuration changes? (y/n) "
+    if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
         cmd_configure_phpswitch
     fi
 }

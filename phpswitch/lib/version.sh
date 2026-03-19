@@ -22,12 +22,15 @@ function version_resolve_php_version {
     # Only if the specific version folder doesn't exist (checked above)
     if [ -d "$HOMEBREW_PREFIX/opt/php" ]; then
         # Get default php version (e.g. 8.4)
-        local default_version_full=$(brew list --versions php | head -n 1)
-        local default_version_str=$(echo "$default_version_full" | awk '{print $2}')
-        local default_version=$(echo "$default_version_str" | cut -d. -f1,2)
-        
+        local default_version_full
+        default_version_full=$(brew list --versions php 2>/dev/null | head -n 1)
+        local default_version_str
+        default_version_str=$(echo "$default_version_full" | awk '{print $2}')
+        local default_version
+        default_version=$(echo "$default_version_str" | cut -d. -f1,2)
+
         # Check if requested version matches default version (e.g. php@8.4 == 8.4)
-        local requested_num=$(echo "$version" | sed 's/php@//')
+        local requested_num="${version#php@}"
         
         if [ "$requested_num" = "$default_version" ]; then
             echo "php@default"
@@ -82,8 +85,9 @@ function version_check_project {
             fi
         fi
         
-        # Move to parent directory
-        current_dir="$(dirname "$current_dir")"
+        # Move to parent directory (pure bash, no subprocess)
+        current_dir="${current_dir%/*}"
+        [ -z "$current_dir" ] && current_dir="/"
     done
     
     if [ -n "$php_version_file" ] && [ -n "$project_version" ]; then
@@ -99,9 +103,11 @@ function version_check_project {
             return 1
         fi
         
-        # Check for potentially dangerous characters
-        if [[ "$project_version" =~ [[:cntrl:]] ]] || [[ "$project_version" == *$'\0'* ]]; then
-            core_debug_log "Dangerous characters detected in version string from: $php_version_file"
+        # Validate version string against an allowlist of safe characters.
+        # Avoids $'\0' in [[ == ]] patterns which expands to empty on bash 3.2 (macOS),
+        # turning *$'\0'* into ** and matching every string.
+        if ! [[ "$project_version" =~ ^[a-zA-Z0-9.@_-]+$ ]]; then
+            core_debug_log "Invalid characters in version string from: $php_version_file"
             return 1
         fi
         
@@ -157,8 +163,8 @@ function version_set_project {
         version="${version#php@}"
     fi
     
-    echo -n "Creating $file_name in the current directory with version $version. Continue? (y/n): "
-    if [ "$(utils_validate_yes_no "Create project PHP version file?" "y")" = "y" ]; then
+    printf "  Create %s in the current directory with version %s? (y/n) " "$file_name" "$version"
+    if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
         echo "$version" > "$file_name"
         utils_show_status "success" "Created project PHP version file: $file_name"
         utils_show_status "info" "This directory and its subdirectories will now use PHP $version"
@@ -178,7 +184,8 @@ function version_install_php {
     utils_show_status "info" "Installing $install_version... This may take a while..."
     
     # Capture both stdout and stderr from brew install
-    local temp_output=$(mktemp)
+    local temp_output
+    temp_output=$(utils_create_secure_temp_file) || { utils_show_status "error" "Failed to create temp file"; return 1; }
     if brew install "$install_version" > "$temp_output" 2>&1; then
         utils_show_status "success" "$version installed successfully"
         rm -f "$temp_output"
@@ -195,8 +202,8 @@ function version_install_php {
             echo "Try closing applications that might be using PHP, or restart your computer."
         elif echo "$error_output" | grep -q "already installed"; then
             utils_show_status "warning" "$version appears to be already installed but may be broken"
-            echo -n "Would you like to reinstall it? (y/n): "
-            if [ "$(utils_validate_yes_no "Reinstall?" "y")" = "y" ]; then
+            printf "  Reinstall it? (y/n) "
+            if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
                 if brew reinstall "$install_version"; then
                     utils_show_status "success" "$version reinstalled successfully"
                     return 0
@@ -215,11 +222,13 @@ function version_install_php {
         elif echo "$error_output" | grep -q "cannot install because it conflicts with"; then
             utils_show_status "error" "Installation conflict detected"
             echo "There appears to be a conflict with another package."
-            local conflicting_package=$(echo "$error_output" | grep -o "conflicts with [^ ]*" | cut -d' ' -f3)
-            if [ -n "$conflicting_package" ]; then
+            local conflicting_package
+            conflicting_package=$(echo "$error_output" | grep -o "conflicts with [^ ]*" | cut -d' ' -f3)
+            # Validate before using in commands — only allow safe package name characters
+            if [ -n "$conflicting_package" ] && [[ "$conflicting_package" =~ ^[a-zA-Z0-9@._-]+$ ]]; then
                 echo "The conflicting package is: $conflicting_package"
-                echo -n "Would you like to uninstall the conflicting package? (y/n): "
-                if [ "$(utils_validate_yes_no "Uninstall conflict?" "n")" = "y" ]; then
+                printf "  Uninstall the conflicting package? (y/n) "
+                if [ "$(utils_validate_yes_no "" "n")" = "y" ]; then
                     if brew uninstall "$conflicting_package"; then
                         utils_show_status "success" "Uninstalled $conflicting_package"
                         utils_show_status "info" "Retrying installation of $version..."
@@ -236,41 +245,37 @@ function version_install_php {
             utils_show_status "error" "Failed to install $version"
         fi
         
-        echo ""
-        echo "Error details:"
-        echo "---------------"
+        printf "\n  Error details:\n\n"
         echo "$error_output" | head -n 10
         if [ $(echo "$error_output" | wc -l) -gt 10 ]; then
-            echo "... (truncated, see full log with 'brew install -v $install_version')"
+            printf "  ... (truncated, see full log with 'brew install -v %s')\n" "$install_version"
         fi
-        echo ""
-        echo "Possible solutions:"
-        echo "1. Run 'brew doctor' to check for any issues with your Homebrew installation"
-        echo "2. Run 'brew update' and try again"
-        echo "3. Check for any conflicting dependencies with 'brew deps --tree $version'"
-        echo "4. You might need to uninstall conflicting packages first"
-        echo "5. Try installing with verbose output: 'brew install -v $version'"
-        echo ""
-        echo -n "Would you like to try a different approach? (y/n): "
-        
-        if [ "$(utils_validate_yes_no "Would you like to try a different approach?" "n")" = "y" ]; then
-            echo "Choose an option:"
-            echo "1) Run 'brew doctor' first then retry"
-            echo "2) Run 'brew update' first then retry"
-            echo "3) Try installing with verbose output"
-            echo "4) Try force reinstall"
-            echo "5) Exit and let me handle it manually"
-            
+        printf "\n  Possible solutions:\n\n"
+        printf "    1  Run 'brew doctor' to check your Homebrew installation\n"
+        printf "    2  Run 'brew update' and try again\n"
+        printf "    3  Check conflicts with 'brew deps --tree %s'\n" "$version"
+        printf "    4  Uninstall conflicting packages first\n"
+        printf "    5  Try verbose output: 'brew install -v %s'\n\n" "$version"
+        printf "  Try a different approach? (y/n) "
+
+        if [ "$(utils_validate_yes_no "" "n")" = "y" ]; then
+            printf "\n  Choose an option:\n\n"
+            printf "    1  run 'brew doctor' then retry\n"
+            printf "    2  run 'brew update' then retry\n"
+            printf "    3  install with verbose output\n"
+            printf "    4  force reinstall\n"
+            printf "    5  exit and handle manually\n\n"
+
             local valid_choice=false
             local fix_option
-            
+
             while [ "$valid_choice" = "false" ]; do
                 read -r fix_option
-                
+
                 if [[ "$fix_option" =~ ^[1-5]$ ]]; then
                     valid_choice=true
                 else
-                    echo -n "Please enter a number between 1 and 5: "
+                    printf "  Enter a number between 1 and 5 "
                 fi
             done
             
@@ -303,8 +308,10 @@ function version_install_php {
             esac
             
             # Check if the retry was successful
-            if brew list --formula | grep -q "^$install_version$" || 
-               ([ "$install_version" = "php" ] && brew list --formula | grep -q "^php$"); then
+            local _installed_list
+            _installed_list=$(brew list --formula 2>/dev/null)
+            if echo "$_installed_list" | grep -qxF "$install_version" || \
+               ([ "$install_version" = "php" ] && echo "$_installed_list" | grep -qxF "php"); then
                 utils_show_status "success" "$version installed successfully on retry"
                 return 0
             else
@@ -321,7 +328,8 @@ function version_install_php {
 # Function to uninstall PHP version
 function version_uninstall_php {
     local version="$1"
-    local service_name=$(fpm_get_service_name "$version")
+    local service_name
+    service_name=$(fpm_get_service_name "$version")
     
     if ! core_check_php_installed "$version"; then
         utils_show_status "error" "$version is not installed"
@@ -329,19 +337,20 @@ function version_uninstall_php {
     fi
     
     # Check if it's the current active version
-    local current_version=$(core_get_current_php_version)
+    local current_version
+    current_version=$(core_get_current_php_version)
     if [ "$current_version" = "$version" ]; then
         utils_show_status "warning" "You are attempting to uninstall the currently active PHP version"
-        echo -n "Would you like to continue? This may break your PHP environment. (y/n): "
-        
-        if [ "$(utils_validate_yes_no "Continue?" "n")" = "n" ]; then
+        printf "  Continue? This may break your PHP environment. (y/n) "
+
+        if [ "$(utils_validate_yes_no "" "n")" = "n" ]; then
             utils_show_status "info" "Uninstallation cancelled"
             return 1
         fi
     fi
     
     # Stop PHP-FPM service if running
-    if brew services list | grep -q "$service_name"; then
+    if brew services list | awk -v svc="$service_name" '$1 == svc' | grep -q .; then
         utils_show_status "info" "Stopping PHP-FPM service for $version..."
         brew services stop "$service_name"
         
@@ -354,7 +363,7 @@ function version_uninstall_php {
     # Unlink the PHP version if it's linked
     if [ "$current_version" = "$version" ]; then
         utils_show_status "info" "Unlinking $version..."
-        brew unlink "$version" 2>/dev/null
+        brew unlink "$version" &>/dev/null
     fi
     
     # Uninstall the PHP version
@@ -369,12 +378,15 @@ function version_uninstall_php {
         utils_show_status "success" "$version has been uninstalled"
         
         # Ask about config files
-        echo -n "Would you like to remove configuration files as well? (y/n): "
-        
-        if [ "$(utils_validate_yes_no "Remove config files?" "n")" = "y" ]; then
+        printf "  Remove configuration files as well? (y/n) "
+
+        if [ "$(utils_validate_yes_no "" "n")" = "y" ]; then
             # Extract version number (e.g., 8.2 from php@8.2)
             local php_version="${version#php@}"
-            if [ -d "$HOMEBREW_PREFIX/etc/php/$php_version" ]; then
+            # Validate before rm -rf: must be non-empty and numeric X.Y form only
+            if [[ -z "$php_version" ]] || ! [[ "$php_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+                utils_show_status "warning" "Cannot determine config directory for '$version'; skipping"
+            elif [ -d "$HOMEBREW_PREFIX/etc/php/$php_version" ]; then
                 utils_show_status "info" "Removing configuration files..."
                 sudo rm -rf "$HOMEBREW_PREFIX/etc/php/$php_version"
                 utils_show_status "success" "Configuration files removed"
@@ -386,9 +398,9 @@ function version_uninstall_php {
         # If this was the active version, suggest switching to another version
         if [ "$current_version" = "$version" ]; then
             utils_show_status "warning" "You have uninstalled the active PHP version"
-            echo -n "Would you like to switch to another installed PHP version? (y/n): "
-            
-            if [ "$(utils_validate_yes_no "Switch to another version?" "y")" = "y" ]; then
+            printf "  Switch to another installed PHP version? (y/n) "
+
+            if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
                 # Show menu with remaining PHP versions
                 return 2
             else
@@ -409,7 +421,8 @@ function version_uninstall_php {
 function version_switch_php {
     local new_version="$1"
     local is_installed="$2"
-    local current_version=$(core_get_current_php_version)
+    local current_version
+    current_version=$(core_get_current_php_version)
     
     # Resolve potential version confusion (php@8.4 vs php@default)
     new_version=$(version_resolve_php_version "$new_version")
@@ -424,9 +437,9 @@ function version_switch_php {
     # Install the version if not installed
     if [ "$is_installed" = "false" ]; then
         utils_show_status "info" "$new_version is not installed"
-        echo -n "Would you like to install it? (y/n): "
-        
-        if [ "$(utils_validate_yes_no "Install?" "n")" = "y" ]; then
+        printf "  Install it? (y/n) "
+
+        if [ "$(utils_validate_yes_no "" "n")" = "y" ]; then
             if ! version_install_php "$new_version"; then
                 utils_show_status "error" "Installation failed"
                 exit 1
@@ -464,9 +477,9 @@ function version_switch_php {
                 echo "This suggests the package is registered but files are missing."
             fi
             
-            echo -n "Would you like to attempt to reinstall it? (y/n): "
-            
-            if [ "$(utils_validate_yes_no "Reinstall?" "y")" = "y" ]; then
+            printf "  Attempt to reinstall it? (y/n) "
+
+            if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
                 if ! brew reinstall "$brew_version"; then
                     utils_show_status "error" "Reinstallation failed, trying forced reinstall..."
                     if ! brew reinstall --force "$brew_version"; then
@@ -493,24 +506,21 @@ function version_switch_php {
         utils_show_status "info" "$new_version is already active in Homebrew"
     else
         utils_show_status "info" "Switching from $current_version to $new_version..."
-        
-        # Check for any conflicting PHP installations
-        core_check_php_conflicts
-        
+
         # Unlink current PHP (if any)
         if [ "$current_version" != "none" ]; then
             utils_show_status "info" "Unlinking $current_version..."
-            brew unlink "$current_version" 2>/dev/null
+            brew unlink "$current_version" &>/dev/null
         fi
-        
+
         # Link new PHP with progressive fallback strategies
         utils_show_status "info" "Linking $new_version..."
-        
+
         # Strategy 1: Normal linking
-        if brew link --force "$brew_version" 2>/dev/null; then
+        if brew link --force "$brew_version" &>/dev/null; then
             utils_show_status "success" "Linked $new_version successfully"
         # Strategy 2: Overwrite linking
-        elif brew link --overwrite "$brew_version" 2>/dev/null; then
+        elif brew link --overwrite "$brew_version" &>/dev/null; then
             utils_show_status "success" "Linked $new_version with overwrite option"
         # Strategy 3: Manual symlinking
         else
@@ -527,7 +537,8 @@ function version_switch_php {
             
             if [ -d "$php_bin_path" ]; then
                 for file in "$php_bin_path"/*; do
-                    if [ -f "$file" ]; then
+                    if [ -f "$file" ] && [ -x "$file" ]; then
+                        local filename
                         filename=$(basename "$file")
                         sudo ln -sf "$file" "$HOMEBREW_PREFIX/bin/$filename" 2>/dev/null
                     fi
@@ -541,10 +552,12 @@ function version_switch_php {
     fi
     
     # Create and update shell configuration
-    local instructions_file=$(shell_update_rc "$new_version")
-    
+    local instructions_file
+    instructions_file=$(shell_update_rc "$new_version")
+
     # Create a reload script for immediate use
-    local reload_script=$(shell_create_reload_script "$new_version")
+    local reload_script
+    reload_script=$(shell_create_reload_script "$new_version")
     
     # Restart PHP-FPM if it's being used
     fpm_restart "$new_version"
@@ -555,103 +568,56 @@ function version_switch_php {
     if [ -z "$SOURCED" ]; then
         export SOURCED=true
         utils_show_status "info" "Applying changes to current shell..."
-        
-        # Try to directly modify PATH to make changes immediate
+
         if shell_force_reload "$new_version"; then
             utils_show_status "success" "Active PHP version is now: $(php -v | head -n 1 | cut -d " " -f 2)"
-            php -v | head -n 1
         else
-            # If direct PATH modification failed, provide clear instructions
             shell_type=$(shell_detect_shell)
             utils_show_status "warning" "Could not update PATH in current shell"
-            echo ""
-            echo "✨ To activate PHP $new_version in your current terminal, run this command:"
-            
+            printf "\n  To activate %s in your current terminal:\n\n" "$new_version"
+            printf "    source \"%s\"\n\n" "$reload_script"
+            printf "  PHP binary location: %s\n" "$(which php)"
+            if [ -L "$(which php)" ]; then
+                printf "  Symlinked to: %s\n" "$(readlink "$(which php)")"
+            fi
+            printf "\n  For permanent effect, open a new terminal or reload your shell:\n\n"
+
             case "$shell_type" in
-                "zsh"|"bash")
-                    echo "source \"$reload_script\""
+                "zsh")
+                    printf "    source ~/.zshrc\n"
+                    ;;
+                "bash")
+                    if [ -f ~/.bashrc ]; then
+                        printf "    source ~/.bashrc\n"
+                    elif [ -f ~/.bash_profile ]; then
+                        printf "    source ~/.bash_profile\n"
+                    else
+                        printf "    source ~/.profile\n"
+                    fi
                     ;;
                 "fish")
-                    echo "source \"$reload_script\""
+                    printf "    source ~/.config/fish/config.fish\n"
                     ;;
                 *)
-                    echo "source \"$reload_script\""
+                    printf "    source ~/.profile\n"
                     ;;
             esac
+            printf "\n"
         fi
-        
-        # Show actual binary location
-        echo ""
-        echo "PHP binary location: $(which php)"
-        if [ -L "$(which php)" ]; then
-            echo "Symlinked to: $(readlink $(which php))"
-        fi
-        
-        # Add permanent instructions
-        echo ""
-        echo "⚠️ For permanent effect, EITHER:"
-        echo "  1. Open a new terminal window, OR"
-        echo "  2. Run this command to reload your shell configuration:"
-        
-        case "$shell_type" in
-            "zsh")
-                echo "     source ~/.zshrc"
-                ;;
-            "bash")
-                if [ -f ~/.bashrc ]; then
-                    echo "     source ~/.bashrc"
-                elif [ -f ~/.bash_profile ]; then
-                    echo "     source ~/.bash_profile"
-                else
-                    echo "     source ~/.profile"
-                fi
-                ;;
-            "fish")
-                echo "     source ~/.config/fish/config.fish"
-                ;;
-            *)
-                echo "     source ~/.profile"
-                ;;
-        esac
     else
-        shell_type=$(shell_detect_shell)
-        
-        echo "To apply the changes to your current terminal, run:"
-        echo "source \"$reload_script\""
-        
-        echo ""
-        echo "For permanent effect, EITHER:"
-        echo "  1. Open a new terminal window, OR"
-        echo "  2. Run this command to reload your shell configuration:"
-        
-        case "$shell_type" in
-            "zsh")
-                echo "     source ~/.zshrc"
-                ;;
-            "bash")
-                if [ -f ~/.bashrc ]; then
-                    echo "     source ~/.bashrc"
-                elif [ -f ~/.bash_profile ]; then
-                    echo "     source ~/.bash_profile"
-                else
-                    echo "     source ~/.profile"
-                fi
-                ;;
-            "fish")
-                echo "     source ~/.config/fish/config.fish"
-                ;;
-            *)
-                echo "     source ~/.profile"
-                ;;
-        esac
+        printf "\n  To apply changes to your current terminal:\n\n"
+        printf "    source \"%s\"\n\n" "$reload_script"
     fi
 }
 
-# Function for silent/quick PHP version switching for auto-switch
+# NOTE: version_auto_switch_php is not called anywhere. Auto-switching dispatches
+# through auto_switch_php in auto-switch.sh via the --auto-mode command flag.
+# Retained here in case it is needed for future direct programmatic use.
 function version_auto_switch_php {
     local new_version="$1"
     local brew_version="$new_version"
-    local current_version=$(core_get_current_php_version)
+    local current_version
+    current_version=$(core_get_current_php_version)
     
     # If versions are the same, no need to switch
     if [ "$current_version" = "$new_version" ]; then
@@ -673,7 +639,7 @@ function version_auto_switch_php {
     
     # Update PATH for current session
     shell_force_reload "$new_version" &>/dev/null
-    
+
     # No UI feedback for auto-switching
     return 0
 }

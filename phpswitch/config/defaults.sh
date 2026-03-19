@@ -2,6 +2,8 @@
 # PHPSwitch Default Configuration
 # Contains default values for configuration
 
+PHPSWITCH_VERSION="1.4.5"
+
 # Default configuration values
 DEFAULT_AUTO_RESTART_PHP_FPM=true
 DEFAULT_BACKUP_CONFIG_FILES=true

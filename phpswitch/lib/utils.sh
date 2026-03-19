@@ -81,8 +81,8 @@ function utils_validate_username {
         return 1
     fi
     
-    # Allow only alphanumeric characters, dots, underscores, and hyphens
-    if [[ "$username" =~ ^[a-zA-Z0-9._-]+$ ]] && [[ ${#username} -le 32 ]]; then
+    # Allow only alphanumeric characters, underscores, and hyphens
+    if [[ "$username" =~ ^[a-zA-Z0-9_-]+$ ]] && [[ ${#username} -le 32 ]]; then
         return 0
     fi
     
@@ -164,70 +164,48 @@ function utils_setup_temp_cleanup_trap {
     trap 'utils_cleanup_temp_files; exit' INT TERM EXIT
 }
 
-# Function to display a spinning animation for long-running processes
-function utils_show_spinner {
-    local message="$1"
-    local pid=$!
-    local spin='-\|/'
+# Function to print text with a smooth left-to-right RGB gradient
+# Usage: utils_print_gradient "text" r1 g1 b1 r2 g2 b2
+function utils_print_gradient {
+    local text="$1"
+    local r1=$2 g1=$3 b1=$4
+    local r2=$5 g2=$6 b2=$7
+    local len=${#text}
+    if [ "$len" -le 1 ]; then
+        printf "\033[38;2;%d;%d;%dm%s\033[0m" "$r1" "$g1" "$b1" "$text"
+        return
+    fi
     local i=0
-    
-    echo -n "$message "
-    
-    while kill -0 $pid 2>/dev/null; do
-        i=$(( (i+1) % 4 ))
-        local current_char="${spin:$i:1}"
-        printf "\r%s %s" "$message" "$current_char"
-        sleep 0.1
+    while [ $i -lt $len ]; do
+        local char="${text:$i:1}"
+        local r=$(( r1 + (r2 - r1) * i / (len - 1) ))
+        local g=$(( g1 + (g2 - g1) * i / (len - 1) ))
+        local b=$(( b1 + (b2 - b1) * i / (len - 1) ))
+        printf "\033[38;2;%d;%d;%dm%s" "$r" "$g" "$b" "$char"
+        i=$(( i + 1 ))
     done
-    
-    printf "\r%s Done!   \n" "$message"
-}
-
-# Alternative function with dots animation for progress indication
-function utils_show_progress {
-    local message="$1"
-    local pid=$!
-    local dots=""
-    
-    echo -n "$message"
-    
-    while kill -0 $pid 2>/dev/null; do
-        dots="${dots}."
-        if [ ${#dots} -gt 5 ]; then
-            dots="."
-        fi
-        printf "\r%s%-6s" "$message" "$dots"
-        sleep 0.3
-    done
-    
-    printf "\r%s Done!      \n" "$message"
+    printf "\033[0m"
 }
 
 # Function to display success or error message with colors
 function utils_show_status {
     local status="$1"
     local message="$2"
-    
+
     if [ "$USE_COLORS" = "true" ]; then
-        if [ "$status" = "success" ]; then
-            echo -e "\033[32m✅ SUCCESS: $message\033[0m"
-        elif [ "$status" = "warning" ]; then
-            echo -e "\033[33m⚠️  WARNING: $message\033[0m"
-        elif [ "$status" = "error" ]; then
-            echo -e "\033[31m❌ ERROR: $message\033[0m"
-        elif [ "$status" = "info" ]; then
-            echo -e "\033[36mℹ️  INFO: $message\033[0m"
-        fi
+        case "$status" in
+            success) printf "     \xe2\x8e\xbf  %s\n" "$message" ;;
+            warning) printf "     \xe2\x8e\xbf  %s\n" "$message" ;;
+            error)   printf "     \xe2\x8e\xbf  %s\n" "$message" ;;
+            info)    printf "\033[2m  \xe2\x8f\xba\033[0m  %s\n" "$message" ;;
+        esac
     else
-        if [ "$status" = "success" ]; then
-            echo "SUCCESS: $message"
-        elif [ "$status" = "warning" ]; then
-            echo "WARNING: $message"
-        elif [ "$status" = "error" ]; then
-            echo "ERROR: $message"
-        elif [ "$status" = "info" ]; then
-            echo "INFO: $message"
-        fi
+        case "$status" in
+            success) echo "     L $message" ;;
+            warning) echo "     L warn: $message" ;;
+            error)   echo "     L error: $message" ;;
+            info)    echo "  * $message" ;;
+        esac
     fi
 }
 
@@ -253,9 +231,22 @@ function utils_validate_yes_no {
             echo "n"
             return 0
         else
-            echo -n "Please enter 'y' or 'n': "
+            printf "  Enter 'y' or 'n' "
         fi
     done
+}
+
+# Safely set a KEY="value" pair in a config file (injection-safe via ENVIRON)
+function utils_set_config_value {
+    local key="$1"
+    local value="$2"
+    local file="$3"
+    KEY="$key" VALUE="$value" awk '
+        BEGIN { k=ENVIRON["KEY"]; v=ENVIRON["VALUE"]; found=0 }
+        $0 ~ ("^" k "=") { print k "=\"" v "\""; found=1; next }
+        { print }
+        END { if (!found) print k "=\"" v "\"" }
+    ' "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
 }
 
 # Function to validate numeric input within a range
@@ -273,117 +264,177 @@ function utils_validate_numeric_input {
 
 # Function to help diagnose PATH issues
 function utils_diagnose_path_issues {
-    echo "PATH Diagnostic"
-    echo "==============="
-    
-    echo "Current PATH:"
-    echo "$PATH" | tr ':' '\n' | nl
-    
-    echo ""
-    echo "PHP binaries in PATH:"
-    
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "PATH Diagnostic" 192 132 252 103 232 249; printf "\n\n"
+    else
+        printf "\n  PATH Diagnostic\n\n"
+    fi
+
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "  "; utils_print_gradient "Current PATH:" 148 182 251 125 207 250; printf "\n"
+    else
+        printf "  Current PATH:\n"
+    fi
+    printf "%s" "$PATH" | tr ':' '\n' | nl | sed 's/^/  /'
+
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "PHP binaries in PATH:" 148 182 251 125 207 250; printf "\n"
+    else
+        printf "\n  PHP binaries in PATH:\n"
+    fi
+
     local count=0
+    local old_IFS="$IFS"
     IFS=:
     for dir in $PATH; do
         if [ -x "$dir/php" ]; then
             count=$((count + 1))
-            echo "$count) $dir/php"
-            echo "   Version: $($dir/php -v 2>/dev/null | head -n 1)"
-            echo "   Type: $(if [ -L "$dir/php" ]; then echo "Symlink → $(readlink "$dir/php")"; else echo "Direct binary"; fi)"
-            echo ""
+            local _ver _type
+            _ver=$("$dir/php" -v 2>/dev/null | head -n 1)
+            if [ -L "$dir/php" ]; then
+                _type="Symlink → $(readlink "$dir/php")"
+            else
+                _type="Direct binary"
+            fi
+            printf "  %d) %s/php\n" "$count" "$dir"
+            printf "     Version: %s\n" "${_ver:-could not determine}"
+            printf "     Type: %s\n\n" "$_type"
         fi
     done
-    unset IFS
-    
+    IFS="$old_IFS"
+
     if [ "$count" -eq 0 ]; then
         utils_show_status "warning" "No PHP binaries found in PATH"
     elif [ "$count" -gt 1 ]; then
         utils_show_status "warning" "Multiple PHP binaries found in PATH. This may cause confusion."
-        echo "The first one in the PATH will be used."
+        printf "  The first one in the PATH will be used.\n"
     fi
     
-    echo ""
-    echo "Active PHP:"
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "Active PHP:" 148 182 251 125 207 250; printf "\n"
+    else
+        printf "\n  Active PHP:\n"
+    fi
     which php
     php -v | head -n 1
-    
-    echo ""
-    echo "Expected PHP path for current version:"
-    local current_version=$(core_get_current_php_version)
-    if [ "$current_version" = "php@default" ]; then
-        echo "$HOMEBREW_PREFIX/opt/php/bin/php"
+
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "Expected PHP path for current version:" 148 182 251 125 207 250; printf "\n"
     else
-        echo "$HOMEBREW_PREFIX/opt/$current_version/bin/php"
+        printf "\n  Expected PHP path for current version:\n"
+    fi
+    local current_version
+    current_version=$(core_get_current_php_version)
+    if [ "$current_version" = "php@default" ]; then
+        printf "  %s/opt/php/bin/php\n" "$HOMEBREW_PREFIX"
+    else
+        printf "  %s/opt/%s/bin/php\n" "$HOMEBREW_PREFIX" "$current_version"
     fi
     
-    echo ""
-    echo "Recommended actions:"
-    echo "1. Ensure the PHP version you want is first in your PATH"
-    echo "2. Check for conflicting PHP binaries in your PATH"
-    echo "3. Run 'hash -r' (bash/zsh) or 'rehash' (fish) to clear command hash table"
-    echo "4. Open a new terminal session to ensure PATH changes take effect"
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "Recommended actions:" 148 182 251 125 207 250; printf "\n"
+    else
+        printf "\n  Recommended actions:\n"
+    fi
+    printf "    1  Ensure the PHP version you want is first in your PATH\n"
+    printf "    2  Check for conflicting PHP binaries in your PATH\n"
+    printf "    3  Run 'hash -r' (bash/zsh) or 'rehash' (fish) to clear command hash table\n"
+    printf "    4  Open a new terminal session to ensure PATH changes take effect\n"
 }
 
 # Function to diagnose the PHP environment
 function utils_diagnose_php_environment {
-    echo "PHP Environment Diagnostic"
-    echo "=========================="
-    
-    # 1. Check all PHP binaries
-    echo "PHP Binaries:"
-    echo "-------------"
-    if command -v php &>/dev/null; then
-        php_path=$(which php)
-        echo "Default PHP: $php_path"
-        if [ -L "$php_path" ]; then
-            real_path=$(readlink "$php_path")
-            echo "  → Symlinked to: $real_path"
-        fi
-        echo "  Version: $(php -v | head -n 1)"
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "PHP Environment Diagnostic" 192 132 252 103 232 249; printf "\n\n"
     else
-        echo "No PHP binary found in PATH"
+        printf "\n  PHP Environment Diagnostic\n\n"
     fi
-    echo ""
-    
+
+    # 1. Check all PHP binaries
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "  "; utils_print_gradient "PHP Binaries" 148 182 251 125 207 250; printf "\n"
+    else
+        printf "  PHP Binaries\n"
+    fi
+    if command -v php &>/dev/null; then
+        local php_path
+        php_path=$(which php)
+        printf "  Default PHP: %s\n" "$php_path"
+        if [ -L "$php_path" ]; then
+            local real_path
+            real_path=$(readlink "$php_path")
+            printf "    → Symlinked to: %s\n" "$real_path"
+        fi
+        printf "  Version: %s\n" "$(php -v | head -n 1)"
+    else
+        printf "  No PHP binary found in PATH\n"
+    fi
+    printf "\n"
+
     # 2. Check all installed PHP versions
-    echo "Installed PHP Versions:"
-    echo "----------------------"
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "Installed PHP Versions" 148 182 251 125 207 250; printf "\n"
+    else
+        printf "\n  Installed PHP Versions\n"
+    fi
+    local installed_versions
     installed_versions=$(core_get_installed_php_versions)
     if [ -n "$installed_versions" ]; then
-        echo "$installed_versions"
+        printf "%s\n" "$installed_versions"
     else
-        echo "No PHP versions installed via Homebrew"
+        printf "  No PHP versions installed via Homebrew\n"
     fi
-    echo ""
-    
+    printf "\n"
+
     # 3. Check Homebrew PHP links
-    echo "Homebrew PHP Links:"
-    echo "------------------"
-    if [ -d "$HOMEBREW_PREFIX/opt" ]; then
-        ls -la "$HOMEBREW_PREFIX/opt" | grep "php"
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "Homebrew PHP Links" 148 182 251 125 207 250; printf "\n"
     else
-        echo "No Homebrew opt directory found"
+        printf "\n  Homebrew PHP Links\n"
     fi
-    echo ""
-    
+    if [ -d "$HOMEBREW_PREFIX/opt" ]; then
+        find "$HOMEBREW_PREFIX/opt" -maxdepth 1 -name '*php*' | sort | while IFS= read -r p; do
+            printf "  %s\n" "$p"
+        done
+    else
+        printf "  No Homebrew opt directory found\n"
+    fi
+    printf "\n"
+
     # 4. Check for conflicting PHP binaries
-    echo "PHP in PATH:"
-    echo "-----------"
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "PHP in PATH" 148 182 251 125 207 250; printf "\n"
+    else
+        printf "\n  PHP in PATH\n"
+    fi
+    local old_IFS="$IFS"
     IFS=:
     for dir in $PATH; do
         if [ -x "$dir/php" ]; then
-            echo "Found in: $dir/php"
-            echo "  Version: $($dir/php -v 2>/dev/null | head -n 1 || echo "Could not determine version")"
-            echo "  Type: $(if [ -L "$dir/php" ]; then echo "Symlink → $(readlink "$dir/php")"; else echo "Direct binary"; fi)"
+            local _ver _type
+            _ver=$("$dir/php" -v 2>/dev/null | head -n 1)
+            if [ -L "$dir/php" ]; then
+                _type="Symlink → $(readlink "$dir/php")"
+            else
+                _type="Direct binary"
+            fi
+            printf "  Found in: %s/php\n" "$dir"
+            printf "    Version: %s\n" "${_ver:-could not determine}"
+            printf "    Type: %s\n" "$_type"
         fi
     done
-    unset IFS
-    echo ""
-    
+    IFS="$old_IFS"
+    printf "\n"
+
     # 5. Check shell config files for PHP path entries
-    echo "Shell Configuration Files:"
-    echo "-------------------------"
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "Shell Configuration Files" 148 182 251 125 207 250; printf "\n"
+    else
+        printf "\n  Shell Configuration Files\n"
+    fi
+    local shell_type
     shell_type=$(shell_detect_shell)
+    local -a config_files
     if [ "$shell_type" = "zsh" ]; then
         config_files=("$HOME/.zshrc" "$HOME/.zprofile")
     elif [ "$shell_type" = "bash" ]; then
@@ -393,18 +444,21 @@ function utils_diagnose_php_environment {
     else
         config_files=("$HOME/.profile")
     fi
-    
+
     for file in "${config_files[@]}"; do
         if [ -f "$file" ]; then
-            echo "Checking $file:"
-            grep -n "PATH.*php" "$file" || echo "  No PHP PATH entries found"
+            printf "  %s\n" "$file"
+            grep -n "PATH.*php" "$file" | sed 's/^/    /' || printf "    No PHP PATH entries found\n"
         fi
     done
-    echo ""
+    printf "\n"
     
     # 6. Check PHP modules
-    echo "Loaded PHP Modules:"
-    echo "------------------"
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "Loaded PHP Modules" 148 182 251 125 207 250; printf "\n"
+    else
+        printf "\n  Loaded PHP Modules\n"
+    fi
     if command -v php &>/dev/null; then
         php -m | grep -v "\[" | sort | head -n 20
         module_count=$(php -m | grep -v "\[" | wc -l)
@@ -417,19 +471,27 @@ function utils_diagnose_php_environment {
     
     
     # 7. Check running PHP-FPM services
-    echo "Running PHP-FPM Services:"
-    echo "-------------------------"
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "Running PHP-FPM Services" 148 182 251 125 207 250; printf "\n"
+    else
+        printf "\n  Running PHP-FPM Services\n"
+    fi
     brew services list | grep -E "^php(@[0-9]\.[0-9])?" || echo "  No PHP services found"
     echo ""
     
     # 8. Summary and recommendations
-    echo "Diagnostic Summary:"
-    echo "------------------"
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "Summary" 148 182 251 125 207 250; printf "\n"
+    else
+        printf "\n  Summary\n"
+    fi
     if command -v php &>/dev/null; then
         php_version=$(php -v | head -n 1 | cut -d " " -f 2)
         homebrew_linked=$(core_get_current_php_version)
         
-        if [[ $homebrew_linked == php@* ]] && [[ $php_version != *$(echo "$homebrew_linked" | grep -o "[0-9]\.[0-9]")* ]]; then
+        local brew_major_minor
+        brew_major_minor=$(echo "$homebrew_linked" | grep -oE "[0-9]+\.[0-9]+")
+        if [[ "$homebrew_linked" == php@* ]] && [[ "$php_version" != *"$brew_major_minor"* ]]; then
             utils_show_status "warning" "Version mismatch detected"
             echo "  The PHP version in use ($php_version) does not match the Homebrew-linked version ($homebrew_linked)"
             echo ""
@@ -555,12 +617,7 @@ function utils_check_dependencies {
             if [ -d "$alt_cache" ] && [ -w "$alt_cache" ]; then
                 # Update config file for future runs
                 if [ -f "$HOME/.phpswitch.conf" ]; then
-                    if grep -q "CACHE_DIRECTORY=" "$HOME/.phpswitch.conf"; then
-                        sed -i.bak "s|CACHE_DIRECTORY=.*|CACHE_DIRECTORY=\"$alt_cache\"|g" "$HOME/.phpswitch.conf"
-                        rm -f "$HOME/.phpswitch.conf.bak" 2>/dev/null
-                    else
-                        echo "CACHE_DIRECTORY=\"$alt_cache\"" >> "$HOME/.phpswitch.conf"
-                    fi
+                    utils_set_config_value "CACHE_DIRECTORY" "$alt_cache" "$HOME/.phpswitch.conf"
                 else
                     # Create config file if it doesn't exist
                     cat > "$HOME/.phpswitch.conf" << EOL
@@ -578,9 +635,9 @@ EOL
     # If we're using the standard cache directory but it's not writable
     elif [ "$cache_dir" = "$HOME/.cache/phpswitch" ] && [ ! -w "$cache_dir" ]; then
         utils_show_status "warning" "Cache directory is not writable: $cache_dir"
-        echo "This is a non-critical issue. PHPSwitch will use temporary directories instead."
-        echo -n "Would you like to fix the permissions now? (y/n): "
-        if [ "$(utils_validate_yes_no "Fix permissions?" "y")" = "y" ]; then
+        printf "  This is a non-critical issue. PHPSwitch will use temporary directories instead.\n"
+        printf "  Fix the permissions now? (y/n) "
+        if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
             # Check if we have the fix-permissions script
             local script_dir="$(dirname "$(realpath "$0" 2>/dev/null || echo "$0")")"
             local fix_script="$script_dir/tools/fix-permissions.sh"
@@ -628,12 +685,7 @@ EOL
                                     
                                     # Update config file
                                     if [ -f "$HOME/.phpswitch.conf" ]; then
-                                        if grep -q "CACHE_DIRECTORY=" "$HOME/.phpswitch.conf"; then
-                                            sed -i.bak "s|CACHE_DIRECTORY=.*|CACHE_DIRECTORY=\"$alt_cache\"|g" "$HOME/.phpswitch.conf"
-                                            rm -f "$HOME/.phpswitch.conf.bak" 2>/dev/null
-                                        else
-                                            echo "CACHE_DIRECTORY=\"$alt_cache\"" >> "$HOME/.phpswitch.conf"
-                                        fi
+                                        utils_set_config_value "CACHE_DIRECTORY" "$alt_cache" "$HOME/.phpswitch.conf"
                                     else
                                         # Create config file if it doesn't exist
                                         cat > "$HOME/.phpswitch.conf" << EOL
