@@ -125,11 +125,11 @@ phpswitch --switch-force=8.4   # installs if not present
 
 PHPSwitch checks the following files (in order) when the menu opens or `--project` is used:
 
-| File | Field |
-|---|---|
-| `.php-version` | plain version string, e.g. `8.2` |
-| `composer.json` | `require.php`, e.g. `>=8.1` |
-| `.tool-versions` | `php 8.2.x` |
+| File             | Field                            |
+| ---------------- | -------------------------------- |
+| `.php-version`   | plain version string, e.g. `8.2` |
+| `composer.json`  | `require.php`, e.g. `>=8.1`      |
+| `.tool-versions` | `php 8.2.x`                      |
 
 ```bash
 echo "8.1" > .php-version
