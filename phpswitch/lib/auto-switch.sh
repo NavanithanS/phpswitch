@@ -20,14 +20,15 @@ function auto_install {
             ;;
         *)
             utils_show_status "error" "Unsupported shell: $SHELL"
-            echo "Auto-switching is only supported for bash, zsh, and fish shells."
+            printf "  Auto-switching is only supported for bash, zsh, and fish shells.\n"
             return 1
             ;;
     esac
     
     # Update config file
-    sed -i.bak "s/AUTO_SWITCH_PHP_VERSION=.*/AUTO_SWITCH_PHP_VERSION=true/" "$HOME/.phpswitch.conf" 2>/dev/null
-    rm -f "$HOME/.phpswitch.conf.bak" 2>/dev/null
+    if [ -f "$HOME/.phpswitch.conf" ]; then
+        utils_set_config_value "AUTO_SWITCH_PHP_VERSION" "true" "$HOME/.phpswitch.conf"
+    fi
     
     # Create cache directory with proper permissions
     local cache_dir="$HOME/.cache/phpswitch"
@@ -38,8 +39,8 @@ function auto_install {
     # Ensure cache directory is writable
     if [ ! -w "$cache_dir" ] && [ -d "$cache_dir" ]; then
         utils_show_status "warning" "Cache directory $cache_dir is not writable"
-        echo -n "Would you like to fix permissions (this may require sudo)? (y/n): "
-        if [ "$(utils_validate_yes_no "Fix permissions?" "y")" = "y" ]; then
+        printf "  Fix permissions (may require sudo)? (y/n) "
+        if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
             # Try to fix permissions, first without sudo
             chmod u+w "$cache_dir" 2>/dev/null
             if [ ! -w "$cache_dir" ]; then
@@ -61,7 +62,7 @@ function auto_install {
     fi
     
     utils_show_status "success" "Auto-switching enabled"
-    echo "Auto-switching will take effect the next time you open a new terminal window or source your shell configuration file."
+    printf "  Auto-switching will take effect the next time you open a new terminal.\n"
     return 0
 }
 
@@ -119,52 +120,44 @@ function phpswitch_auto_detect_project() {
     # If not in cache, check for project file and add to cache
     if [ "$cache_hit" = "false" ]; then
         # Use a temporary file to avoid permission issues
-        local temp_cache_file=$(mktemp)
-        
+        local temp_cache_file
+        temp_cache_file=$(utils_create_secure_temp_file) || return 0
+
         # Copy existing cache if available
         if [ -f "$cache_file" ] && [ -r "$cache_file" ]; then
             cat "$cache_file" > "$temp_cache_file" 2>/dev/null
         fi
-        
+
         # Check for PHP version file
         for file in ".php-version" ".phpversion" ".php"; do
             if [ -f "$current_dir/$file" ]; then
-                # Store this in cache
-                echo "$current_dir:$(cat "$current_dir/$file" | tr -d '[:space:]')" >> "$temp_cache_file"
-                # Run phpswitch in auto mode
-                phpswitch --auto-mode > /dev/null 2>&1
-                
-                # Try to update the main cache file if writable
-                if [ -w "$(dirname "$cache_file")" ]; then
-                    mv "$temp_cache_file" "$cache_file" 2>/dev/null
+                local ver
+                ver=$(tr -d '[:space:]' < "$current_dir/$file" 2>/dev/null)
+                # Validate version string before caching
+                if [[ "$ver" =~ ^[a-zA-Z0-9.@_-]*$ ]]; then
+                    printf '%s:%s\n' "$current_dir" "$ver" >> "$temp_cache_file"
                 fi
+                phpswitch --auto-mode > /dev/null 2>&1
+                mv "$temp_cache_file" "$cache_file" 2>/dev/null || rm -f "$temp_cache_file" 2>/dev/null
                 return
             fi
         done
 
         # Check for composer.json or .tool-versions using phpswitch helper
         if [ -f "$current_dir/composer.json" ] || [ -f "$current_dir/.tool-versions" ]; then
-            local version=$(phpswitch --get-project-version 2>/dev/null)
+            local version
+            version=$(phpswitch --get-project-version 2>/dev/null)
             if [ -n "$version" ]; then
-                echo "$current_dir:$version" >> "$temp_cache_file"
+                printf '%s:%s\n' "$current_dir" "$version" >> "$temp_cache_file"
                 phpswitch --auto-mode > /dev/null 2>&1
-                
-                if [ -w "$(dirname "$cache_file")" ]; then
-                    mv "$temp_cache_file" "$cache_file" 2>/dev/null
-                fi
+                mv "$temp_cache_file" "$cache_file" 2>/dev/null || rm -f "$temp_cache_file" 2>/dev/null
                 return
             fi
         fi
-        
+
         # No PHP version file found, add to cache with empty version
-        echo "$current_dir:" >> "$temp_cache_file"
-        
-        # Try to update the main cache file if writable
-        if [ -w "$(dirname "$cache_file")" ]; then
-            mv "$temp_cache_file" "$cache_file" 2>/dev/null
-        else
-            rm -f "$temp_cache_file" 2>/dev/null
-        fi
+        printf '%s:\n' "$current_dir" >> "$temp_cache_file"
+        mv "$temp_cache_file" "$cache_file" 2>/dev/null || rm -f "$temp_cache_file" 2>/dev/null
     fi
 }
 
@@ -243,57 +236,49 @@ function phpswitch_auto_detect_project() {
     # If not in cache, check for project file and add to cache
     if [ "$cache_hit" = "false" ]; then
         # Use a temporary file to avoid permission issues
-        local temp_cache_file=$(mktemp)
-        
+        local temp_cache_file
+        temp_cache_file=$(mktemp 2>/dev/null) || return 0
+        chmod 600 "$temp_cache_file" 2>/dev/null
+
         # Copy existing cache if available
         if [ -f "$cache_file" ] && [ -r "$cache_file" ]; then
             cat "$cache_file" > "$temp_cache_file" 2>/dev/null
         fi
-        
+
         # Check for PHP version file
         for file in ".php-version" ".phpversion" ".php"; do
             if [ -f "$current_dir/$file" ]; then
-                # Store this in cache
-                echo "$current_dir:$(cat "$current_dir/$file" | tr -d '[:space:]')" >> "$temp_cache_file"
-                # Run phpswitch in auto mode
-                phpswitch --auto-mode > /dev/null 2>&1
-                
-                # Try to update the main cache file if writable
-                if [ -w "$(dirname "$cache_file")" ]; then
-                    mv "$temp_cache_file" "$cache_file" 2>/dev/null
+                local ver
+                ver=$(tr -d '[:space:]' < "$current_dir/$file" 2>/dev/null)
+                if [[ "$ver" =~ ^[a-zA-Z0-9.@_-]*$ ]]; then
+                    printf '%s:%s\n' "$current_dir" "$ver" >> "$temp_cache_file"
                 fi
+                phpswitch --auto-mode > /dev/null 2>&1
+                mv "$temp_cache_file" "$cache_file" 2>/dev/null || rm -f "$temp_cache_file" 2>/dev/null
                 return
             fi
         done
 
         # Check for composer.json or .tool-versions using phpswitch helper
         if [ -f "$current_dir/composer.json" ] || [ -f "$current_dir/.tool-versions" ]; then
-            local version=$(phpswitch --get-project-version 2>/dev/null)
+            local version
+            version=$(phpswitch --get-project-version 2>/dev/null)
             if [ -n "$version" ]; then
-                echo "$current_dir:$version" >> "$temp_cache_file"
+                printf '%s:%s\n' "$current_dir" "$version" >> "$temp_cache_file"
                 phpswitch --auto-mode > /dev/null 2>&1
-                
-                if [ -w "$(dirname "$cache_file")" ]; then
-                    mv "$temp_cache_file" "$cache_file" 2>/dev/null
-                fi
+                mv "$temp_cache_file" "$cache_file" 2>/dev/null || rm -f "$temp_cache_file" 2>/dev/null
                 return
             fi
         fi
-        
+
         # No PHP version file found, add to cache with empty version
-        echo "$current_dir:" >> "$temp_cache_file"
-        
-        # Try to update the main cache file if writable
-        if [ -w "$(dirname "$cache_file")" ]; then
-            mv "$temp_cache_file" "$cache_file" 2>/dev/null
-        else
-            rm -f "$temp_cache_file" 2>/dev/null
-        fi
+        printf '%s:\n' "$current_dir" >> "$temp_cache_file"
+        mv "$temp_cache_file" "$cache_file" 2>/dev/null || rm -f "$temp_cache_file" 2>/dev/null
     fi
 }
 
 # Enable the cd hook for bash
-if [[ $PROMPT_COMMAND != *"phpswitch_auto_detect_project"* ]]; then
+if [[ "$PROMPT_COMMAND" != *"phpswitch_auto_detect_project"* ]]; then
     PROMPT_COMMAND="phpswitch_auto_detect_project;$PROMPT_COMMAND"
 fi
 
@@ -366,8 +351,12 @@ function phpswitch_auto_detect_project --on-variable PWD
     # If not in cache, check for project file and add to cache
     if test "$cache_hit" = "false"
         # Use a temporary file to avoid permission issues
-        set temp_cache_file (mktemp)
-        
+        set temp_cache_file (mktemp 2>/dev/null)
+        if test -z "$temp_cache_file"; or not test -f "$temp_cache_file"
+            return
+        end
+        chmod 600 "$temp_cache_file" 2>/dev/null
+
         # Copy existing cache if available
         if test -f "$cache_file"; and test -r "$cache_file"
             cat "$cache_file" > "$temp_cache_file" 2>/dev/null
@@ -433,8 +422,8 @@ function auto_clear_directory_cache {
         else
             # Try with sudo if direct removal fails
             utils_show_status "warning" "No write permission for $cache_file"
-            echo -n "Would you like to try with sudo? (y/n): "
-            if [ "$(utils_validate_yes_no "Try with sudo?" "y")" = "y" ]; then
+            printf "  Try with sudo? (y/n) "
+            if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
                 sudo rm -f "$cache_file" 2>/dev/null
                 if [ ! -f "$cache_file" ]; then
                     utils_show_status "success" "Directory cache cleared with sudo"
@@ -452,23 +441,47 @@ function auto_clear_directory_cache {
 function auto_switch_php {
     local new_version="$1"
     local brew_version
-    
+
     if [ "$new_version" = "php@default" ]; then
         brew_version="php"
     else
         brew_version="$new_version"
     fi
-    
-    # Unlink current PHP
-    brew unlink $(core_get_current_php_version) &>/dev/null
-    
+
+    # Unlink current PHP (skip if no version is active)
+    local _current_ver
+    _current_ver=$(core_get_current_php_version)
+    if [ -n "$_current_ver" ] && [ "$_current_ver" != "none" ]; then
+        brew unlink "$_current_ver" &>/dev/null
+    fi
+
     # Link new PHP
     brew link --force "$brew_version" &>/dev/null
-    
-    # If linking succeeded, return success
-    if [ $? -eq 0 ]; then
-        return 0
-    else
+
+    if [ $? -ne 0 ]; then
         return 1
     fi
+
+    # Silently restart PHP-FPM if enabled
+    if [ "$AUTO_RESTART_PHP_FPM" = "true" ]; then
+        local service_name
+        service_name=$(fpm_get_service_name "$new_version")
+        # Capture once — avoids calling brew services list twice (slow) and eliminates TOCTOU
+        local services_list
+        services_list=$(brew services list 2>/dev/null)
+        local running_services
+        running_services=$(echo "$services_list" | grep -E "^php(@[0-9]\.[0-9])?" | awk '{print $1}')
+        while IFS= read -r service; do
+            [ -z "$service" ] && continue
+            [ "$service" != "$service_name" ] && brew services stop "$service" &>/dev/null
+        done <<< "$running_services"
+        # awk exact field match avoids "php" matching "php@8.1" etc.
+        if echo "$services_list" | awk -v svc="$service_name" '$1 == svc' | grep -q "started"; then
+            brew services restart "$service_name" &>/dev/null
+        else
+            brew services start "$service_name" &>/dev/null
+        fi
+    fi
+
+    return 0
 }

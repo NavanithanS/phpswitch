@@ -23,47 +23,70 @@ function ext_manage_extensions {
         ini_dir="$HOMEBREW_PREFIX/etc/php/$numeric_version"
     fi
     
-    utils_show_status "info" "PHP Extensions for $php_version (version $numeric_version):"
-    echo ""
-    
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "PHP Extensions for $php_version (version $numeric_version)" 192 132 252 103 232 249; printf "\n\n"
+    else
+        printf "\n  PHP Extensions for %s (version %s)\n\n" "$php_version" "$numeric_version"
+    fi
+
     # List installed extensions
-    echo "Currently loaded extensions:"
-    php -m | sort | grep -v "\[" | sed 's/^/- /'
-    
-    echo ""
-    echo "Extension configuration files:"
-    
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "  "; utils_print_gradient "Loaded extensions" 148 182 251 125 207 250; printf "\n\n"
+    else
+        printf "  Loaded extensions\n\n"
+    fi
+    php -m | sort | grep -v "\[" | sed 's/^/    /'
+
+    printf "\n"
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "  "; utils_print_gradient "Configuration files" 125 207 250 103 232 249; printf "\n\n"
+    else
+        printf "  Configuration files\n\n"
+    fi
+
     if [ -d "$ini_dir" ]; then
         if [ -d "$ini_dir/conf.d" ]; then
-            ls -1 "$ini_dir/conf.d" | grep -i "\.ini$" | sed 's/^/- /'
+            ls -1 "$ini_dir/conf.d" | grep -i "\.ini$" | sed 's/^/    /'
         else
-            echo "No conf.d directory found at $ini_dir/conf.d"
+            printf "    No conf.d directory found at %s/conf.d\n" "$ini_dir"
         fi
     else
-        echo "No configuration directory found at $ini_dir"
+        printf "    No configuration directory found at %s\n" "$ini_dir"
     fi
-    
-    echo ""
-    echo "Options:"
-    echo "1) Enable/disable an extension"
-    echo "2) Edit php.ini"
-    echo "3) Show detailed extension information"
-    echo "0) Back to main menu"
-    echo ""
-    echo -n "Please select an option (0-3): "
+
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "\n  "; utils_print_gradient "Options" 103 232 249 85 245 248; printf "\n\n"
+    else
+        printf "\n  Options\n\n"
+    fi
+    printf "    1  enable/disable an extension\n"
+    printf "    2  edit php.ini\n"
+    printf "    3  show detailed extension information\n"
+    printf "    0  back to main menu\n"
+    printf "\n"
+    if [ "$USE_COLORS" = "true" ]; then
+        printf "  "; utils_print_gradient "Select (0-3)" 148 182 251 125 207 250; printf " "
+    else
+        printf "  Select (0-3) "
+    fi
     
     local option
     read -r option
     
     case $option in
         1)
-            echo -n "Enter extension name: "
+            printf "  Extension name "
             read -r ext_name
+            # Validate: only lowercase letters, digits, underscores, hyphens
+            if [[ -n "$ext_name" ]] && ! [[ "$ext_name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+                utils_show_status "error" "Invalid extension name: $ext_name"
+                return 1
+            fi
             if [ -n "$ext_name" ]; then
-                echo "Select action for $ext_name:"
-                echo "1) Enable extension"
-                echo "2) Disable extension"
-                echo -n "Select (1-2): "
+                printf "\n  Action for %s\n\n" "$ext_name"
+                printf "    1  enable\n"
+                printf "    2  disable\n"
+                printf "\n  Select (1-2) "
                 
                 local ext_action
                 read -r ext_action
@@ -110,14 +133,14 @@ function ext_manage_extensions {
             if [ -f "$php_ini" ]; then
                 utils_show_status "info" "Opening php.ini for $php_version..."
                 if [ -n "$EDITOR" ]; then
-                    $EDITOR "$php_ini"
+                    "$EDITOR" "$php_ini"
                 else
                     nano "$php_ini"
                 fi
                 
                 utils_show_status "info" "php.ini edited. Restart PHP-FPM to apply changes"
-                echo -n "Would you like to restart PHP-FPM now? (y/n): "
-                if [ "$(utils_validate_yes_no "Restart PHP-FPM?" "y")" = "y" ]; then
+                printf "  Restart PHP-FPM now? (y/n) "
+                if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
                     fpm_restart "$php_version"
                 fi
             else
@@ -125,10 +148,10 @@ function ext_manage_extensions {
             fi
             ;;
         3)
-            echo -n "Enter extension name (or leave blank for all): "
+            printf "  Extension name (blank for all) "
             read -r ext_detail
             if [ -n "$ext_detail" ]; then
-                php -i | grep -i "$ext_detail" | less
+                php -i | grep -iF "$ext_detail" | less
             else
                 php -i | less
             fi
@@ -142,9 +165,9 @@ function ext_manage_extensions {
     esac
     
     # Allow user to perform another extension management action
-    echo ""
-    echo -n "Would you like to perform another extension management action? (y/n): "
-    if [ "$(utils_validate_yes_no "Another action?" "y")" = "y" ]; then
+    printf "\n"
+    printf "  Perform another action? (y/n) "
+    if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
         ext_manage_extensions "$php_version"
     fi
 }

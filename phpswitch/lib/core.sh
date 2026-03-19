@@ -19,18 +19,34 @@ function core_debug_log {
 function core_load_config {
     CONFIG_FILE="$HOME/.phpswitch.conf"
     
-    # Default settings
-    AUTO_RESTART_PHP_FPM=true
-    BACKUP_CONFIG_FILES=true
-    DEFAULT_PHP_VERSION=""
-    MAX_BACKUPS=5
-    AUTO_SWITCH_PHP_VERSION=false
-    CACHE_DIRECTORY=""  # Empty means use default location
+    # Default settings — sourced from defaults.sh values
+    AUTO_RESTART_PHP_FPM="${DEFAULT_AUTO_RESTART_PHP_FPM:-true}"
+    BACKUP_CONFIG_FILES="${DEFAULT_BACKUP_CONFIG_FILES:-true}"
+    DEFAULT_PHP_VERSION="${DEFAULT_PHP_VERSION:-}"
+    MAX_BACKUPS="${DEFAULT_MAX_BACKUPS:-5}"
+    AUTO_SWITCH_PHP_VERSION="${DEFAULT_AUTO_SWITCH_PHP_VERSION:-false}"
+    CACHE_DIRECTORY="${DEFAULT_CACHE_DIRECTORY:-}"
     
-    # Load settings if config exists
+    # Load settings if config exists — parse as KEY=VALUE without sourcing
     if [ -f "$CONFIG_FILE" ]; then
         core_debug_log "Loading configuration from $CONFIG_FILE"
-        source "$CONFIG_FILE"
+        while IFS='=' read -r _key _value; do
+            [[ "$_key" =~ ^[[:space:]]*# ]] && continue
+            [[ -z "$_key" ]] && continue
+            _key="${_key// /}"
+            _value="${_value%%#*}"
+            _value="${_value#\"}" ; _value="${_value%\"}"
+            _value="${_value#\'}" ; _value="${_value%\'}"
+            case "$_key" in
+                AUTO_RESTART_PHP_FPM)  AUTO_RESTART_PHP_FPM="$_value"  ;;
+                BACKUP_CONFIG_FILES)   BACKUP_CONFIG_FILES="$_value"    ;;
+                DEFAULT_PHP_VERSION)   DEFAULT_PHP_VERSION="$_value"    ;;
+                MAX_BACKUPS)           MAX_BACKUPS="$_value"             ;;
+                AUTO_SWITCH_PHP_VERSION) AUTO_SWITCH_PHP_VERSION="$_value" ;;
+                CACHE_DIRECTORY)       CACHE_DIRECTORY="$_value"        ;;
+                *) core_debug_log "Unknown config key: $_key" ;;
+            esac
+        done < "$CONFIG_FILE"
     else
         core_debug_log "No configuration file found at $CONFIG_FILE"
     fi
@@ -54,7 +70,9 @@ function core_load_config {
 # Create default configuration
 function core_create_default_config {
     if [ ! -f "$HOME/.phpswitch.conf" ]; then
-        cat > "$HOME/.phpswitch.conf" <<EOL
+        local tmp_conf
+        tmp_conf=$(mktemp) || { utils_show_status "error" "Failed to create temp file for config"; return 1; }
+        cat > "$tmp_conf" <<EOL
 # PHPSwitch Configuration
 AUTO_RESTART_PHP_FPM=true
 BACKUP_CONFIG_FILES=true
@@ -63,6 +81,12 @@ MAX_BACKUPS=5
 AUTO_SWITCH_PHP_VERSION=false
 CACHE_DIRECTORY=""
 EOL
+        if [ $? -ne 0 ] || [ ! -s "$tmp_conf" ]; then
+            rm -f "$tmp_conf"
+            utils_show_status "error" "Failed to write config content"
+            return 1
+        fi
+        mv "$tmp_conf" "$HOME/.phpswitch.conf" || { rm -f "$tmp_conf"; utils_show_status "error" "Failed to write config file"; return 1; }
         utils_show_status "success" "Created default configuration at ~/.phpswitch.conf"
     fi
 }
@@ -70,7 +94,21 @@ EOL
 # Function to get all installed PHP versions
 function core_get_installed_php_versions {
     # Get both php@X.Y versions and the default php (which could be the latest version)
-    { brew list | grep "^php@" || true; brew list | grep "^php$" | sed 's/php/php@default/g' || true; } | sort
+    local brew_list
+    brew_list=$(brew list 2>/dev/null)
+    local versions
+    versions=$(echo "$brew_list" | grep "^php@" || true)
+
+    # Check if the "php" formula is installed and get its version
+    if echo "$brew_list" | grep -q "^php$"; then
+        # Add php@default for internal logic
+        # Do NOT also add php@$major_minor here — it creates duplicate menu entries
+        # when the default formula version matches an explicitly installed php@X.Y.
+        # version_resolve_php_version handles the mapping from php@X.Y -> php@default.
+        versions="$versions"$'\n'"php@default"
+    fi
+    
+    echo "$versions" | sort | uniq
 }
 
 # Function to get and manage the cache directory with better error handling
@@ -123,12 +161,7 @@ function core_get_cache_dir {
                 
                 # Save this location to config for future use
                 if [ -f "$HOME/.phpswitch.conf" ]; then
-                    if grep -q "CACHE_DIRECTORY=" "$HOME/.phpswitch.conf"; then
-                        sed -i.bak "s|CACHE_DIRECTORY=.*|CACHE_DIRECTORY=\"$alt_cache\"|g" "$HOME/.phpswitch.conf"
-                        rm -f "$HOME/.phpswitch.conf.bak" 2>/dev/null
-                    else
-                        echo "CACHE_DIRECTORY=\"$alt_cache\"" >> "$HOME/.phpswitch.conf"
-                    fi
+                    utils_set_config_value "CACHE_DIRECTORY" "$alt_cache" "$HOME/.phpswitch.conf"
                 else
                     # Create config file if it doesn't exist
                     core_create_default_config
@@ -146,68 +179,49 @@ function core_get_cache_dir {
     echo "$cache_dir"
 }
 
+# Fallback list of known PHP versions when brew search is unavailable
+function core_fallback_php_versions {
+    echo "php@7.4"
+    echo "php@8.0"
+    echo "php@8.1"
+    echo "php@8.2"
+    echo "php@8.3"
+    echo "php@8.4"
+    echo "php@default"
+}
+
+# Check if a version cache file is fresh within the given timeout (seconds)
+function core_is_cache_fresh {
+    local cache_file="$1"
+    local timeout="$2"
+    [ -f "$cache_file" ] || return 1
+    local mod_time
+    if [ "$(uname)" = "Darwin" ]; then
+        mod_time=$(stat -f %m "$cache_file" 2>/dev/null) || return 1
+    else
+        mod_time=$(stat -c %Y "$cache_file" 2>/dev/null) || return 1
+    fi
+    local current_time
+    current_time=$(date +%s)
+    [ $(( current_time - mod_time )) -lt "$timeout" ]
+}
+
 # Enhanced get_available_php_versions function with persistent caching and better error handling
 function core_get_available_php_versions {
-    # Get the appropriate cache directory
-    local cache_dir=$(core_get_cache_dir)
+    local cache_dir
+    cache_dir=$(core_get_cache_dir)
     local cache_file="$cache_dir/available_versions.cache"
     local cache_timeout=3600  # Cache expires after 1 hour (in seconds)
-    
-    # Function to check cache freshness
-    function is_cache_fresh {
-        local cache_file="$1"
-        local timeout="$2"
-        
-        if [ ! -f "$cache_file" ]; then
-            return 1
-        fi
-        
-        # Get cache file's modification time
-        if [ "$(uname)" = "Darwin" ]; then
-            # macOS
-            local mod_time=$(stat -f %m "$cache_file" 2>/dev/null)
-            if [ $? -ne 0 ]; then
-                return 1
-            fi
-        else
-            # Linux and others
-            local mod_time=$(stat -c %Y "$cache_file" 2>/dev/null)
-            if [ $? -ne 0 ]; then
-                return 1
-            fi
-        fi
-        
-        # Get current time
-        local current_time=$(date +%s)
-        
-        # Check if cache is fresh
-        if [ $((current_time - mod_time)) -lt "$timeout" ]; then
-            return 0
-        else
-            return 1
-        fi
-    }
-    
+
     # Check if cache exists and is recent
-    if is_cache_fresh "$cache_file" "$cache_timeout"; then
+    if core_is_cache_fresh "$cache_file" "$cache_timeout"; then
         core_debug_log "Using cached available PHP versions from $cache_file"
         cat "$cache_file" 2>/dev/null || core_fallback_php_versions
         return
     fi
-    
+
     core_debug_log "Cache is stale or doesn't exist. Refreshing PHP versions..."
-    
-    # Create a fallback PHP versions function instead of a file
-    function core_fallback_php_versions {
-        echo "php@7.4"
-        echo "php@8.0"
-        echo "php@8.1"
-        echo "php@8.2"
-        echo "php@8.3"
-        echo "php@8.4"
-        echo "php@default"
-    }
-    
+
     # Create a temporary file for the new cache
     local temp_cache_file
     temp_cache_file=$(utils_create_secure_temp_file)
@@ -222,25 +236,25 @@ function core_get_available_php_versions {
             search_file1=$(utils_create_secure_temp_file)
             search_file2=$(utils_create_secure_temp_file)
             
-            # Run searches in background
-            brew search /php@[0-9]/ 2>/dev/null | grep '^php@' > "$search_file1" & 
+            # Run searches in background, track both PIDs
+            brew search /php@[0-9]/ 2>/dev/null | grep '^php@' > "$search_file1" &
+            local brew_pid1=$!
             brew search /^php$/ 2>/dev/null | sed 's/^php$/php@default/' > "$search_file2" &
-            brew_pid=$!
-            
+            local brew_pid2=$!
+
             # Wait for up to 10 seconds
             for i in {1..10}; do
-                if ! kill -0 $brew_pid 2>/dev/null; then
-                    # Command completed
+                if ! kill -0 $brew_pid1 2>/dev/null && ! kill -0 $brew_pid2 2>/dev/null; then
                     core_debug_log "Homebrew search completed in $i seconds"
                     break
                 fi
                 sleep 1
             done
-            
-            # Kill if still running
-            if kill -0 $brew_pid 2>/dev/null; then
-                kill $brew_pid 2>/dev/null
-                wait $brew_pid 2>/dev/null || true
+
+            # Kill both if still running
+            if kill -0 $brew_pid1 2>/dev/null || kill -0 $brew_pid2 2>/dev/null; then
+                kill $brew_pid1 $brew_pid2 2>/dev/null
+                wait $brew_pid1 $brew_pid2 2>/dev/null || true
                 core_debug_log "Brew search took too long, using fallback values"
                 core_fallback_php_versions > "$temp_cache_file"
             else
@@ -277,16 +291,16 @@ function core_get_available_php_versions {
     local spin_length=${#spin}
     local i=0
     
-    echo -n "Searching for available PHP versions..."
-    
+    printf "  Searching for available PHP versions..."
+
     while kill -0 $spinner_pid 2>/dev/null; do
         i=$(( (i+1) % 4 ))
         local current_char="${spin:$i:1}"
-        printf "\rSearching for available PHP versions... %s" "$current_char"
+        printf "\r  Searching for available PHP versions... %s" "$current_char"
         sleep 0.1
     done
-    
-    printf "\rSearching for available PHP versions... Done!     \n"
+
+    printf "\r  Searching for available PHP versions...          \n"
     
     # Wait for the background process
     wait
@@ -341,7 +355,7 @@ function core_get_active_php_version {
     core_debug_log "PHP binary: $which_php"
     
     if [ -n "$which_php" ]; then
-        php_version=$($which_php -v 2>/dev/null | head -n 1 | cut -d " " -f 2)
+        php_version=$("$which_php" -v 2>/dev/null | head -n 1 | cut -d " " -f 2)
         core_debug_log "PHP version: $php_version"
         echo "$php_version"
     else
@@ -352,14 +366,16 @@ function core_get_active_php_version {
 # Function to check for conflicting PHP installations
 function core_check_php_conflicts {
     # Find all PHP binaries in the PATH
+    local old_IFS="$IFS"
     IFS=:
     for dir in $PATH; do
         if [ -x "$dir/php" ]; then
-            echo "Found PHP binary at: $dir/php"
-            "$dir/php" -v | head -n 1
+            local php_ver
+            php_ver=$("$dir/php" -v 2>/dev/null | head -n 1 | cut -d' ' -f2)
+            printf "  Found PHP binary at: %s/php  (%s)\n" "$dir" "$php_ver"
         fi
     done
-    unset IFS
+    IFS="$old_IFS"
 }
 
 # Function to check if PHP version is actually installed
