@@ -111,7 +111,7 @@ function fpm_restart {
     if brew services list | awk -v svc="$service_name" '$1 == svc' | grep -q "started"; then
         utils_show_status "info" "Restarting PHP-FPM service for $service_name..."
         
-        # Try normal restart first
+        # Try user-mode restart first (SEC-04: avoid sudo for brew services)
         local restart_output
         restart_output=$(brew services restart "$service_name" 2>&1)
         if echo "$restart_output" | grep -q "Successfully"; then

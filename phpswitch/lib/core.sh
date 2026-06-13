@@ -5,8 +5,8 @@
 # Set debug mode (false by default)
 DEBUG_MODE=false
 
-# Get Homebrew prefix
-HOMEBREW_PREFIX=$(brew --prefix)
+# HOMEBREW_PREFIX is set in core_load_config after dependency validation
+HOMEBREW_PREFIX=""
 
 # Function to log debug messages
 function core_debug_log {
@@ -37,6 +37,7 @@ function core_load_config {
             _value="${_value%%#*}"
             _value="${_value#\"}" ; _value="${_value%\"}"
             _value="${_value#\'}" ; _value="${_value%\'}"
+            # shellcheck disable=SC2034
             case "$_key" in
                 AUTO_RESTART_PHP_FPM)  AUTO_RESTART_PHP_FPM="$_value"  ;;
                 BACKUP_CONFIG_FILES)   BACKUP_CONFIG_FILES="$_value"    ;;
@@ -49,6 +50,14 @@ function core_load_config {
         done < "$CONFIG_FILE"
     else
         core_debug_log "No configuration file found at $CONFIG_FILE"
+    fi
+    
+    # Determine Homebrew prefix (SEC-03: deferred from global scope)
+    if command -v brew >/dev/null 2>&1; then
+        HOMEBREW_PREFIX=$(brew --prefix)
+    else
+        echo "Error: Homebrew is not installed or not in PATH" >&2
+        exit 1
     fi
     
     # Validate Homebrew prefix for security
@@ -72,7 +81,7 @@ function core_create_default_config {
     if [ ! -f "$HOME/.phpswitch.conf" ]; then
         local tmp_conf
         tmp_conf=$(mktemp) || { utils_show_status "error" "Failed to create temp file for config"; return 1; }
-        cat > "$tmp_conf" <<EOL
+        if ! cat > "$tmp_conf" <<EOL
 # PHPSwitch Configuration
 AUTO_RESTART_PHP_FPM=true
 BACKUP_CONFIG_FILES=true
@@ -81,7 +90,12 @@ MAX_BACKUPS=5
 AUTO_SWITCH_PHP_VERSION=false
 CACHE_DIRECTORY=""
 EOL
-        if [ $? -ne 0 ] || [ ! -s "$tmp_conf" ]; then
+        then
+            rm -f "$tmp_conf"
+            utils_show_status "error" "Failed to write config content"
+            return 1
+        fi
+        if [ ! -s "$tmp_conf" ]; then
             rm -f "$tmp_conf"
             utils_show_status "error" "Failed to write config content"
             return 1
@@ -91,11 +105,20 @@ EOL
     fi
 }
 
+# Cache variable for brew list
+_PHPSWITCH_BREW_LIST_CACHE=""
+
 # Function to get all installed PHP versions
 function core_get_installed_php_versions {
-    # Get both php@X.Y versions and the default php (which could be the latest version)
+    # PERF-01: Cache brew list to avoid repeated slow calls
     local brew_list
-    brew_list=$(brew list 2>/dev/null)
+    if [ -n "$_PHPSWITCH_BREW_LIST_CACHE" ]; then
+        brew_list="$_PHPSWITCH_BREW_LIST_CACHE"
+    else
+        brew_list=$(brew list 2>/dev/null)
+        _PHPSWITCH_BREW_LIST_CACHE="$brew_list"
+    fi
+    
     local versions
     versions=$(echo "$brew_list" | grep "^php@" || true)
 
@@ -115,13 +138,23 @@ function core_get_installed_php_versions {
 function core_get_cache_dir {
     # Check if custom cache directory is set in config
     if [ -n "$CACHE_DIRECTORY" ]; then
+        # FEAT-01: Validate custom cache directory path
+        if ! utils_validate_path "$CACHE_DIRECTORY"; then
+            core_debug_log "CACHE_DIRECTORY failed path validation: $CACHE_DIRECTORY"
+            CACHE_DIRECTORY=""
+        elif [[ "$CACHE_DIRECTORY" != "$HOME"* ]] && [[ "$CACHE_DIRECTORY" != "/tmp"* ]]; then
+            core_debug_log "CACHE_DIRECTORY must be under \$HOME or /tmp: $CACHE_DIRECTORY"
+            CACHE_DIRECTORY=""
+        fi
+    fi
+    
+    if [ -n "$CACHE_DIRECTORY" ]; then
         # Use custom location from config
         local cache_dir="$CACHE_DIRECTORY"
         
         # Try to create it if it doesn't exist
         if [ ! -d "$cache_dir" ]; then
-            mkdir -p "$cache_dir" 2>/dev/null
-            if [ $? -ne 0 ]; then
+            if ! mkdir -p "$cache_dir" 2>/dev/null; then
                 core_debug_log "Failed to create custom cache directory: $cache_dir"
                 # Fallback to temporary directory
                 cache_dir=$(mktemp -d /tmp/phpswitch.XXXXXX)
@@ -181,12 +214,11 @@ function core_get_cache_dir {
 
 # Fallback list of known PHP versions when brew search is unavailable
 function core_fallback_php_versions {
-    echo "php@7.4"
-    echo "php@8.0"
     echo "php@8.1"
     echo "php@8.2"
     echo "php@8.3"
     echo "php@8.4"
+    echo "php@8.5"
     echo "php@default"
 }
 
@@ -288,7 +320,6 @@ function core_get_available_php_versions {
     # Show a brief spinner while we wait
     local spinner_pid=$!
     local spin='-\|/'
-    local spin_length=${#spin}
     local i=0
     
     printf "  Searching for available PHP versions..."
@@ -401,7 +432,8 @@ function core_check_php_installed {
 
 # Function to clear cache
 function core_clear_cache {
-    local cache_dir=$(core_get_cache_dir)
+    local cache_dir
+    cache_dir=$(core_get_cache_dir)
     
     if [ -d "$cache_dir" ]; then
         rm -f "$cache_dir"/*.cache "$cache_dir"/directory_cache.txt 2>/dev/null

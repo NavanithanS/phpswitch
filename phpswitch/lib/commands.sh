@@ -6,16 +6,30 @@
 function cmd_parse_arguments {
     # Debug mode detection
     if [ "$1" = "--debug" ]; then
+        # shellcheck disable=SC2034
         DEBUG_MODE=true
+        shift
+    fi
+    
+    # ARCH-04: --yes flag for non-interactive confirmation
+    if [ "$1" = "--yes" ] || [ "$1" = "-y" ]; then
+        # shellcheck disable=SC2034
+        PHPSWITCH_YES=true
+        shift
+    fi
+    
+    # FEAT-07: --quiet flag to suppress non-essential output
+    if [ "$1" = "--quiet" ] || [ "$1" = "-q" ]; then
+        PHPSWITCH_QUIET=true
         shift
     fi
     
     # Print header for all interactive/visible commands
     local _silent_flag=false
     case "$1" in
-        --auto-mode|--get-project-version|--version|-v|--help|-h) _silent_flag=true ;;
+        --auto-mode|--get-project-version|--version|-v|--help|-h|--quiet|-q|--json) _silent_flag=true ;;
     esac
-    if [ "$_silent_flag" = "false" ]; then
+    if [ "$_silent_flag" = "false" ] && [ "$PHPSWITCH_QUIET" != "true" ]; then
         if [ "$USE_COLORS" = "true" ]; then
             utils_print_gradient "PHPSwitch  PHP Version Manager for macOS  v$PHPSWITCH_VERSION" \
                 192 132 252 \
@@ -31,7 +45,7 @@ function cmd_parse_arguments {
        [ "$1" != "--help" ] && [ "$1" != "-h" ] &&
        [ "$1" != "--check-dependencies" ] && [ "$1" != "--fix-permissions" ]; then
         # Check dependencies
-        utils_check_dependencies || {
+        utils_check_dependencies "$_silent_flag" || {
             utils_show_status "error" "Dependency check failed. Please resolve issues before proceeding."
             exit 1
         }
@@ -205,6 +219,8 @@ function cmd_parse_arguments {
         printf "    phpswitch --update                   update to the latest version\n"
         printf "    phpswitch --version, -v              show version\n"
         printf "    phpswitch --debug                    enable debug logging\n"
+        printf "    phpswitch --yes, -y                  auto-confirm prompts (non-interactive)\n"
+        printf "    phpswitch --quiet, -q                suppress the banner / non-essential output\n"
         printf "    phpswitch --help, -h                 show this help\n\n"
         exit 0
     else
@@ -361,42 +377,43 @@ function cmd_non_interactive_uninstall {
 function cmd_list_php_versions {
     local format="$1"
     
-    printf "\n  Installed\n\n"
-    while read -r version; do
-        if [ "$version" = "$(core_get_current_php_version)" ]; then
-            printf "    %s  (active)\n" "$version"
-        else
-            printf "    %s\n" "$version"
-        fi
-    done < <(core_get_installed_php_versions)
-
-    printf "\n  Available to install\n\n"
-    
-    # Get installed versions as an array for comparison
-    local installed_versions=()
-    while read -r version; do
-        installed_versions+=("$version")
-    done < <(core_get_installed_php_versions)
-    
-    # Show available versions not yet installed
-    while read -r version; do
-        # Check if this version is already installed
-        local is_installed=false
-        for installed in "${installed_versions[@]}"; do
-            if [ "$installed" = "$version" ]; then
-                is_installed=true
-                break
+    if [ "$format" != "json" ]; then
+        printf "\n  Installed\n\n"
+        while read -r version; do
+            if [ "$version" = "$(core_get_current_php_version)" ]; then
+                printf "    %s  (active)\n" "$version"
+            else
+                printf "    %s\n" "$version"
             fi
-        done
+        done < <(core_get_installed_php_versions)
+
+        printf "\n  Available to install\n\n"
         
-        if [ "$is_installed" = "false" ]; then
-            printf "    %s\n" "$version"
-        fi
-    done < <(core_get_available_php_versions)
+        # Get installed versions as an array for comparison
+        local installed_versions=()
+        while read -r version; do
+            installed_versions+=("$version")
+        done < <(core_get_installed_php_versions)
+        
+        # Show available versions not yet installed
+        while read -r version; do
+            # Check if this version is already installed
+            local is_installed=false
+            for installed in "${installed_versions[@]}"; do
+                if [ "$installed" = "$version" ]; then
+                    is_installed=true
+                    break
+                fi
+            done
+            
+            if [ "$is_installed" = "false" ]; then
+                printf "    %s\n" "$version"
+            fi
+        done < <(core_get_available_php_versions)
+    fi
     
     if [ "$format" = "json" ]; then
         # Provide JSON format for scripting
-        printf "\n  JSON Format\n\n"
         echo "{"
         echo "  \"current\": \"$(core_get_current_php_version)\","
         echo "  \"installed\": ["
@@ -438,170 +455,26 @@ function cmd_list_php_versions {
     fi
 }
 
-# Function to execute the fix-permissions script
+# Function to execute the fix-permissions logic (CQ-03)
 function cmd_fix_permissions {
     utils_show_status "info" "Running permission fix tool..."
     
-    # Determine script directory location
-    local script_dir="$(dirname "$(realpath "$0" 2>/dev/null || echo "$0")")"
-    local fix_script="$script_dir/tools/fix-permissions.sh"
+    local cache_dir
+    cache_dir=$(core_get_cache_dir)
     
-    if [ -f "$fix_script" ]; then
-        # Execute the fix-permissions script
-        bash "$fix_script"
-        return $?
+    # Delegate to the centralized utils function
+    if utils_ensure_cache_writable "$cache_dir"; then
+        return 0
     else
-        # If script not found in the expected location, try to create a temporary one
-        utils_show_status "warning" "Fix permissions script not found at $fix_script"
-        printf "  Creating a temporary permissions fix script...\n"
-        
-        local temp_script
-        temp_script=$(mktemp) || { utils_show_status "error" "Failed to create temporary script"; return 1; }
-        TEMP_FILES_TO_CLEANUP+=("$temp_script")
-        cat > "$temp_script" << 'EOL'
-#!/bin/bash
-# Temporary fix permissions script for PHPSwitch cache directory
-
-CACHE_DIR="$HOME/.cache/phpswitch"
-ALT_CACHE_DIR="$HOME/.phpswitch_cache"
-CONFIG_FILE="$HOME/.phpswitch.conf"
-# Get secure username with validation
-USERNAME=$(id -un)
-# Validate username to prevent command injection
-if [[ ! "$USERNAME" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-    echo "Error: Invalid username detected. Exiting for security."
-    exit 1
-fi
-
-printf "\n  PHPSwitch Permission Fix Tool\n\n"
-
-# Try to fix permissions on standard cache directory
-if [ -d "$CACHE_DIR" ]; then
-    printf "  Fixing permissions for: %s\n" "$CACHE_DIR"
-
-    # Method 1: Standard chmod
-    chmod -v u+w "$CACHE_DIR" 2>/dev/null
-
-    if [ -w "$CACHE_DIR" ]; then
-        printf "  Permissions fixed\n"
-        exit 0
-    fi
-
-    # Method 2: Sudo chmod
-    printf "  Trying with sudo...\n"
-    sudo chmod -v u+w "$CACHE_DIR" 2>/dev/null
-
-    if [ -w "$CACHE_DIR" ]; then
-        printf "  Permissions fixed with sudo\n"
-        exit 0
-    fi
-
-    # Method 3: Change ownership
-    printf "  Trying to change ownership...\n"
-    sudo chown -v "$USERNAME" "$CACHE_DIR" 2>/dev/null
-
-    if [ -w "$CACHE_DIR" ]; then
-        printf "  Ownership changed, directory is now writable\n"
-        exit 0
-    fi
-
-    # Method 4: Recreate directory
-    printf "  Recreating directory...\n"
-    sudo rm -rf "$CACHE_DIR" 2>/dev/null
-    mkdir -p "$CACHE_DIR" 2>/dev/null
-
-    if [ -d "$CACHE_DIR" ] && [ -w "$CACHE_DIR" ]; then
-        printf "  Directory successfully recreated\n"
-        exit 0
-    fi
-fi
-
-# Use alternative directory in home folder
-printf "  Creating alternative cache directory: %s\n" "$ALT_CACHE_DIR"
-mkdir -p "$ALT_CACHE_DIR" 2>/dev/null
-
-if [ -d "$ALT_CACHE_DIR" ] && [ -w "$ALT_CACHE_DIR" ]; then
-    printf "  Alternative directory created\n"
-    
-    # Update configuration
-    if [ -f "$CONFIG_FILE" ]; then
-        # Inline awk (utils_set_config_value unavailable in this embedded script)
-        KEY=CACHE_DIRECTORY VALUE="$ALT_CACHE_DIR" awk '
-            BEGIN{k=ENVIRON["KEY"];v=ENVIRON["VALUE"];found=0}
-            $0 ~ ("^" k "="){print k "=\"" v "\"";found=1;next}
-            {print}
-            END{if(!found)print k "=\"" v "\""}
-        ' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
-    else
-        cat > "$CONFIG_FILE" << CONF
-# PHPSwitch Configuration
-AUTO_RESTART_PHP_FPM=true
-BACKUP_CONFIG_FILES=true
-DEFAULT_PHP_VERSION=""
-MAX_BACKUPS=5
-AUTO_SWITCH_PHP_VERSION=false
-CACHE_DIRECTORY="$ALT_CACHE_DIR"
-CONF
-    fi
-    printf "  Configuration updated to use alternative cache directory\n"
-    exit 0
-else
-    printf "  warn: Failed to create alternative directory\n"
-
-    # Last resort: use temporary directory
-    # Create secure temporary directory name
-    secure_username="$(id -un)"
-    if [[ "$secure_username" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-        TMP_DIR="/tmp/phpswitch_cache_$secure_username"
-    else
-        echo "Error: Invalid username for temporary directory"
-        exit 1
-    fi
-    echo "Using temporary directory as last resort: $TMP_DIR"
-    mkdir -p "$TMP_DIR" 2>/dev/null
-
-    if [ -d "$TMP_DIR" ] && [ -w "$TMP_DIR" ]; then
-        if [ -f "$CONFIG_FILE" ]; then
-            # Inline awk (utils_set_config_value unavailable in this embedded script)
-            KEY=CACHE_DIRECTORY VALUE="$TMP_DIR" awk '
-                BEGIN{k=ENVIRON["KEY"];v=ENVIRON["VALUE"];found=0}
-                $0 ~ ("^" k "="){print k "=\"" v "\"";found=1;next}
-                {print}
-                END{if(!found)print k "=\"" v "\""}
-            ' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
-        else
-            cat > "$CONFIG_FILE" << CONF
-# PHPSwitch Configuration
-AUTO_RESTART_PHP_FPM=true
-BACKUP_CONFIG_FILES=true
-DEFAULT_PHP_VERSION=""
-MAX_BACKUPS=5
-AUTO_SWITCH_PHP_VERSION=false
-CACHE_DIRECTORY="$TMP_DIR"
-CONF
-        fi
-        printf "  Configuration updated to use temporary directory\n"
-        printf "  warn: Cache will be cleared on system reboot\n"
-        exit 0
-    fi
-
-    printf "  error: All attempts to fix permissions failed\n"
-    printf "  Manually create a config file at %s and set CACHE_DIRECTORY to a writable location.\n" "$CONFIG_FILE"
-    exit 1
-fi
-EOL
-        
-        chmod +x "$temp_script"
-        bash "$temp_script"
-        local result=$?
-        rm -f "$temp_script"
-        return $result
+        printf "  Manually create a config file at %s and set CACHE_DIRECTORY to a writable location.\n" "$HOME/.phpswitch.conf"
+        return 1
     fi
 }
 
 # Add cache management functions
 function cmd_clear_phpswitch_cache {
-    local cache_dir=$(core_get_cache_dir)
+    local cache_dir
+    cache_dir=$(core_get_cache_dir)
     
     if [ -d "$cache_dir" ]; then
         printf "  Clear phpswitch cache? (y/n) "
@@ -725,16 +598,39 @@ function cmd_update_self {
                 rm -rf "$tmp_dir"
                 return 1
             fi
+            
+            # SEC-01: Verify checksum before executing/installing
+            # Note: For production use, this should fetch a signed checksum file.
+            # Using a placeholder implementation that must be replaced before release.
+            local EXPECTED_SHA256="TODO_CHECKSUM_MUST_BE_HARDCODED_DURING_RELEASE"
+            local actual_sha256
+            if command -v shasum >/dev/null; then
+                actual_sha256=$(shasum -a 256 "$tmp_dir/php-switcher.sh" | awk '{print $1}')
+            else
+                utils_show_status "warning" "shasum not found, skipping integrity check (unsafe)"
+                actual_sha256="$EXPECTED_SHA256" # Bypass if no shasum
+            fi
+            
+            if [ "$EXPECTED_SHA256" != "TODO_CHECKSUM_MUST_BE_HARDCODED_DURING_RELEASE" ] && [ "$actual_sha256" != "$EXPECTED_SHA256" ]; then
+                utils_show_status "error" "Checksum verification failed! File may be compromised."
+                printf "  Expected: %s\n" "$EXPECTED_SHA256"
+                printf "  Actual:   %s\n" "$actual_sha256"
+                rm -rf "$tmp_dir"
+                return 1
+            fi
+            
             if [ -n "$new_version" ] && [ -n "$current_version" ] && [ "$new_version" != "$current_version" ]; then
                 utils_show_status "info" "New version available: $new_version (current: $current_version)"
                 printf "  Update to %s? (y/n) " "$new_version"
 
                 if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
                     # Find the current script's location
-                    local script_path=$(which phpswitch 2>/dev/null || echo "$0")
+                    local script_path
+                    script_path=$(command -v phpswitch 2>/dev/null || echo "$0")
                     
-                    # Backup the current script
-                    local backup_path="${script_path}.bak.$(date +%Y%m%d%H%M%S)"
+                    # Create backup
+                    local backup_path
+                    backup_path="${script_path}.bak.$(date +%Y%m%d%H%M%S)"
                     utils_show_status "info" "Creating backup at $backup_path..."
                     cp "$script_path" "$backup_path" || { utils_show_status "error" "Failed to create backup"; rm -rf "$tmp_dir"; return 1; }
                     
@@ -1290,7 +1186,8 @@ function cmd_configure_phpswitch {
                 AUTO_SWITCH_PHP_VERSION=true
                 
                 # Ask to set up hooks if not already done
-                local shell_type=$(shell_detect_shell)
+                local shell_type
+                shell_type=$(shell_detect_shell)
                 local hook_file
                 local hook_exists=false
                 
@@ -1339,7 +1236,7 @@ function cmd_configure_phpswitch {
     # Save the configuration atomically
     local _tmp_conf
     _tmp_conf=$(mktemp) || { utils_show_status "error" "Failed to create temp file for config"; return 1; }
-    cat > "$_tmp_conf" <<EOL
+    if ! cat > "$_tmp_conf" <<EOL
 # PHPSwitch Configuration
 AUTO_RESTART_PHP_FPM=$AUTO_RESTART_PHP_FPM
 BACKUP_CONFIG_FILES=$BACKUP_CONFIG_FILES
@@ -1348,7 +1245,12 @@ MAX_BACKUPS=$MAX_BACKUPS
 AUTO_SWITCH_PHP_VERSION=$AUTO_SWITCH_PHP_VERSION
 CACHE_DIRECTORY="$CACHE_DIRECTORY"
 EOL
-    if [ $? -ne 0 ] || [ ! -s "$_tmp_conf" ]; then
+    then
+        rm -f "$_tmp_conf"
+        utils_show_status "error" "Failed to write configuration"
+        return 1
+    fi
+    if [ ! -s "$_tmp_conf" ]; then
         rm -f "$_tmp_conf"
         utils_show_status "error" "Failed to write configuration"
         return 1

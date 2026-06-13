@@ -22,3 +22,13 @@ Icon
 # Temporary files
 tmp/
 temp/
+
+# Build artifacts
+phpswitch-combined.sh
+phpswitch/phpswitch-combined.sh
+phpswitch/.phpswitch-combined.tmp.sh
+
+# Editor / tool directories
+.obsidian/
+.ruby-lsp/
+.claude/

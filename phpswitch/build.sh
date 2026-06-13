@@ -73,8 +73,12 @@ if [ "$CREATE_DEV_COPY" = true ]; then
     DEV_RELEASE_FILE="$SCRIPT_DIR/php-switcher.sh"
 fi
 
-# Get version
-VERSION=$(grep "^# Version:" "$SCRIPT_DIR/phpswitch.sh" | cut -d":" -f2 | tr -d " ")
+# Get version from the single source of truth (defaults.sh)
+VERSION=$(grep '^PHPSWITCH_VERSION=' "$SCRIPT_DIR/config/defaults.sh" | sed 's/PHPSWITCH_VERSION="\(.*\)"/\1/')
+if [ -z "$VERSION" ]; then
+    echo "❌ Error: Could not determine version from config/defaults.sh"
+    exit 1
+fi
 
 echo "Building PHPSwitch version $VERSION..."
 
@@ -90,22 +94,56 @@ cat > "$COMBINED_FILE" << INNEREOF
 INNEREOF
 
 # Add content from config/defaults.sh (without shebang)
-echo "# Default Configuration" >> "$COMBINED_FILE"
-tail -n +2 "$SCRIPT_DIR/config/defaults.sh" >> "$COMBINED_FILE"
-echo "" >> "$COMBINED_FILE"
+{
+    echo "# Default Configuration"
+    tail -n +2 "$SCRIPT_DIR/config/defaults.sh"
+    echo ""
+} >> "$COMBINED_FILE"
 
 # Add content from each lib module (without shebang)
 modules=("core.sh" "utils.sh" "shell.sh" "version.sh" "fpm.sh" "extensions.sh" "auto-switch.sh" "commands.sh")
 
+# Validate all modules exist before building
 for module in "${modules[@]}"; do
-    echo "# Module: $module" >> "$COMBINED_FILE"
-    tail -n +2 "$SCRIPT_DIR/lib/$module" >> "$COMBINED_FILE"
-    echo "" >> "$COMBINED_FILE"
+    if [ ! -f "$SCRIPT_DIR/lib/$module" ]; then
+        echo "❌ Error: Missing module: lib/$module"
+        rm -f "$COMBINED_FILE"
+        exit 1
+    fi
+done
+
+for module in "${modules[@]}"; do
+    {
+        echo "# Module: $module"
+        tail -n +2 "$SCRIPT_DIR/lib/$module"
+        echo ""
+    } >> "$COMBINED_FILE"
 done
 
 # Add the main script logic
 echo "# Main script logic" >> "$COMBINED_FILE"
 cat >> "$COMBINED_FILE" << INNEREOF
+# REL-04: Serialize concurrent auto-switch invocations only.
+# Auto-switch hooks can fire rapidly on quick directory changes; the lock
+# prevents overlapping --auto-mode switches. Interactive and read-only
+# commands are intentionally NOT locked, so they never block each other.
+# The trap is set before core_load_config so the temp-cleanup trap it
+# installs chains this rm rather than clobbering it.
+if [ "\$1" = "--auto-mode" ]; then
+    LOCKFILE="/tmp/phpswitch_\$(id -u).lock"
+    # Atomic create; fails if the lockfile already exists
+    if ! ( set -o noclobber; echo "\$\$" > "\$LOCKFILE" ) 2>/dev/null; then
+        _pid=\$(cat "\$LOCKFILE" 2>/dev/null)
+        if kill -0 "\$_pid" 2>/dev/null; then
+            # Another auto-switch is in progress; stay silent and yield.
+            exit 0
+        fi
+        # Stale lock from a dead process: take it over.
+        echo "\$\$" > "\$LOCKFILE"
+    fi
+    trap 'rm -f "\$LOCKFILE"' EXIT INT TERM
+fi
+
 # Load configuration
 core_load_config
 

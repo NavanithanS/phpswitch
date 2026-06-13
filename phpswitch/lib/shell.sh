@@ -130,7 +130,8 @@ function shell_update_rc {
     
     # Create backup (only if enabled)
     if [ "$BACKUP_CONFIG_FILES" = "true" ]; then
-        local backup_file="${rc_file}.bak.$(date +%Y%m%d%H%M%S)"
+        local backup_file
+        backup_file="${rc_file}.bak.$(date +%Y%m%d%H%M%S)"
         
         # Validate backup file path
         if ! utils_validate_path "$backup_file"; then
@@ -266,7 +267,8 @@ function shell_force_reload {
     local version="$1"
     local php_bin_path=""
     local php_sbin_path=""
-    local shell_type=$(shell_detect_shell)
+    local shell_type
+    shell_type=$(shell_detect_shell)
     
     if [ "$version" = "php@default" ]; then
         php_bin_path="$HOMEBREW_PREFIX/opt/php/bin"
@@ -285,11 +287,8 @@ function shell_force_reload {
     # Log the current PATH for debugging
     core_debug_log "Before PATH update: $PATH"
     
-    # Direct PATH manipulation for the current shell
-    # First, remove any existing PHP paths from PATH
-    local new_path=""
-    local found_php=false
-    
+    # Direct PATH manipulation for the current shell:
+    # rebuild PATH with PHP paths first, dropping any existing PHP entries
     if [ "$shell_type" = "fish" ]; then
         # For fish shell, we need to tell user to do this manually
         echo "To update PATH in current fish shell session, run:"
@@ -304,8 +303,7 @@ function shell_force_reload {
         
         # Build a new PATH with PHP paths at the beginning
         local system_paths=""
-        local php_paths="$php_bin_path:$php_sbin_path"
-        
+
         # Validate PHP paths before using them
         if ! utils_validate_path "$php_bin_path"; then
             utils_show_status "error" "Invalid PHP bin path: $php_bin_path"
@@ -328,7 +326,6 @@ function shell_force_reload {
                 
                 # Skip any PHP-related paths
                 if echo "$path_component" | grep -q -i "php"; then
-                    found_php=true
                     continue
                 fi
                 
@@ -352,7 +349,8 @@ function shell_force_reload {
         core_debug_log "After PATH update: $PATH"
         
         # Verify PHP version
-        local current_php=$(which php)
+        local current_php
+        current_php=$(command -v php)
         core_debug_log "PHP now resolves to: $current_php"
         
         if [[ "$current_php" == *"$version"* ]] || [[ "$current_php" == *"php/bin/php" && "$version" == "php@default" ]]; then
@@ -393,7 +391,8 @@ function shell_cleanup_backups {
 # Function to create a direct executable script that can be sourced to reload PHP
 function shell_create_reload_script {
     local version="$1"
-    local shell_type=$(shell_detect_shell)
+    local shell_type
+    shell_type=$(shell_detect_shell)
     local php_bin_path=""
     local php_sbin_path=""
     

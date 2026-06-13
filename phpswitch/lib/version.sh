@@ -44,13 +44,14 @@ function version_resolve_php_version {
 
 # Function to check for project-specific PHP version
 function version_check_project {
-    local current_dir="$(pwd)"
+    local current_dir
+    current_dir="$(pwd)"
     local php_version_file=""
     local project_version=""
-    local custom_files=(".php-version" ".phpversion" ".php")
+    local custom_files=(".php-version" ".phpversion")
     
-    # Look for version files in current directory and parent directories
-    while [ "$current_dir" != "/" ] && [ "$current_dir" != "." ]; do
+    # Walk parent directories up to $HOME (FEAT-03: don't go beyond home)
+    while [ "$current_dir" != "/" ] && [ "$current_dir" != "." ] && [[ "$current_dir" == "$HOME"* ]]; do
         # 1. Custom PHPSwitch files (Highest Priority)
         for file in "${custom_files[@]}"; do
             if [ -f "$current_dir/$file" ]; then
@@ -128,7 +129,8 @@ function version_check_project {
             
             while read -r version; do
                 if [[ "$version" == php@"$project_version".* ]]; then
-                    local minor_ver=$(echo "$version" | sed "s/php@$project_version\.\(.*\)/\1/")
+                    local minor_ver
+                    minor_ver="${version#"php@$project_version."}"
                     if [ -z "$highest_minor" ] || [ "$minor_ver" -gt "$highest_minor" ]; then
                         highest_minor="$minor_ver"
                         highest_version="$version"
@@ -181,7 +183,16 @@ function version_install_php {
         install_version="php"
     fi
     
+    # ARCH-04: Detect non-interactive mode (stdin is not a terminal)
+    local _interactive=true
+    [ ! -t 0 ] && _interactive=false
+    
     utils_show_status "info" "Installing $install_version... This may take a while..."
+    
+    # FEAT-04: Set up SIGINT trap during brew operations
+    local _prev_trap
+    _prev_trap=$(trap -p INT)
+    trap 'utils_show_status "warning" "Installation interrupted. Cleaning up..."; brew cleanup 2>/dev/null; eval "$_prev_trap"; return 1' INT
     
     # Capture both stdout and stderr from brew install
     local temp_output
@@ -191,7 +202,8 @@ function version_install_php {
         rm -f "$temp_output"
         return 0
     else
-        local error_output=$(cat "$temp_output")
+        local error_output
+        error_output=$(cat "$temp_output")
         rm -f "$temp_output"
         
         # Check for specific error conditions
@@ -202,14 +214,19 @@ function version_install_php {
             echo "Try closing applications that might be using PHP, or restart your computer."
         elif echo "$error_output" | grep -q "already installed"; then
             utils_show_status "warning" "$version appears to be already installed but may be broken"
-            printf "  Reinstall it? (y/n) "
-            if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
-                if brew reinstall "$install_version"; then
-                    utils_show_status "success" "$version reinstalled successfully"
-                    return 0
-                else
-                    utils_show_status "error" "Reinstallation failed"
+            if [ "$_interactive" = "true" ]; then
+                printf "  Reinstall it? (y/n) "
+                if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
+                    if brew reinstall "$install_version"; then
+                        utils_show_status "success" "$version reinstalled successfully"
+                        eval "$_prev_trap"
+                        return 0
+                    else
+                        utils_show_status "error" "Reinstallation failed"
+                    fi
                 fi
+            else
+                utils_show_status "info" "Skipping reinstall prompt (non-interactive mode)"
             fi
         elif echo "$error_output" | grep -q "No available formula"; then
             utils_show_status "error" "Formula not found: $install_version"
@@ -247,7 +264,7 @@ function version_install_php {
         
         printf "\n  Error details:\n\n"
         echo "$error_output" | head -n 10
-        if [ $(echo "$error_output" | wc -l) -gt 10 ]; then
+        if [ "$(echo "$error_output" | wc -l | tr -d ' ')" -gt 10 ]; then
             printf "  ... (truncated, see full log with 'brew install -v %s')\n" "$install_version"
         fi
         printf "\n  Possible solutions:\n\n"
@@ -528,11 +545,9 @@ function version_switch_php {
             
             # Try to directly create symlinks
             local php_bin_path="$HOMEBREW_PREFIX/opt/$brew_version/bin"
-            local php_sbin_path="$HOMEBREW_PREFIX/opt/$brew_version/sbin"
             
             if [ ! -d "$php_bin_path" ] && [ "$new_version" = "php@default" ]; then
                 php_bin_path="$HOMEBREW_PREFIX/opt/php/bin"
-                php_sbin_path="$HOMEBREW_PREFIX/opt/php/sbin"
             fi
             
             if [ -d "$php_bin_path" ]; then
@@ -552,8 +567,7 @@ function version_switch_php {
     fi
     
     # Create and update shell configuration
-    local instructions_file
-    instructions_file=$(shell_update_rc "$new_version")
+    shell_update_rc "$new_version" > /dev/null
 
     # Create a reload script for immediate use
     local reload_script
@@ -608,38 +622,4 @@ function version_switch_php {
         printf "\n  To apply changes to your current terminal:\n\n"
         printf "    source \"%s\"\n\n" "$reload_script"
     fi
-}
-
-# NOTE: version_auto_switch_php is not called anywhere. Auto-switching dispatches
-# through auto_switch_php in auto-switch.sh via the --auto-mode command flag.
-# Retained here in case it is needed for future direct programmatic use.
-function version_auto_switch_php {
-    local new_version="$1"
-    local brew_version="$new_version"
-    local current_version
-    current_version=$(core_get_current_php_version)
-    
-    # If versions are the same, no need to switch
-    if [ "$current_version" = "$new_version" ]; then
-        return 0
-    fi
-    
-    core_debug_log "Auto-switching from $current_version to $new_version"
-    
-    # Handle default PHP
-    if [ "$new_version" = "php@default" ]; then
-        brew_version="php"
-    fi
-    
-    # Unlink current PHP
-    brew unlink "$current_version" &>/dev/null
-    
-    # Link new PHP
-    brew link --force "$brew_version" &>/dev/null
-    
-    # Update PATH for current session
-    shell_force_reload "$new_version" &>/dev/null
-
-    # No UI feedback for auto-switching
-    return 0
 }

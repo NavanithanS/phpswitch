@@ -159,9 +159,16 @@ function utils_cleanup_temp_files {
     TEMP_DIRS_TO_CLEANUP=()
 }
 
-# Security: Setup trap for automatic cleanup
+# Security: Setup trap for automatic cleanup (chains with existing traps)
 function utils_setup_temp_cleanup_trap {
-    trap 'utils_cleanup_temp_files; exit' INT TERM EXIT
+    local _existing_exit_trap
+    _existing_exit_trap=$(trap -p EXIT | sed "s/^trap -- '\(.*\)' EXIT$/\1/")
+    if [ -n "$_existing_exit_trap" ]; then
+        # shellcheck disable=SC2064
+        trap "utils_cleanup_temp_files; $_existing_exit_trap; exit" INT TERM EXIT
+    else
+        trap 'utils_cleanup_temp_files; exit' INT TERM EXIT
+    fi
 }
 
 # Function to print text with a smooth left-to-right RGB gradient
@@ -176,15 +183,16 @@ function utils_print_gradient {
         return
     fi
     local i=0
-    while [ $i -lt $len ]; do
+    local output=""
+    while [ "$i" -lt "$len" ]; do
         local char="${text:$i:1}"
         local r=$(( r1 + (r2 - r1) * i / (len - 1) ))
         local g=$(( g1 + (g2 - g1) * i / (len - 1) ))
         local b=$(( b1 + (b2 - b1) * i / (len - 1) ))
-        printf "\033[38;2;%d;%d;%dm%s" "$r" "$g" "$b" "$char"
+        output+=$(printf "\033[38;2;%d;%d;%dm%s" "$r" "$g" "$b" "$char")
         i=$(( i + 1 ))
     done
-    printf "\033[0m"
+    printf "%s\033[0m" "$output"
 }
 
 # Function to display success or error message with colors
@@ -211,9 +219,16 @@ function utils_show_status {
 
 # Function to validate yes/no response, with default value
 function utils_validate_yes_no {
-    local prompt="$1"
+    # $1 (prompt) is unused; $2 is the default answer
     local default="$2"
-    
+
+    # Non-interactive confirmation: honor the global --yes/-y flag (ARCH-04).
+    # Auto-answer with the prompt's default, falling back to "y".
+    if [ "${PHPSWITCH_YES:-false}" = "true" ]; then
+        echo "${default:-y}"
+        return 0
+    fi
+
     while true; do
         read -r response
         
@@ -315,7 +330,7 @@ function utils_diagnose_path_issues {
     else
         printf "\n  Active PHP:\n"
     fi
-    which php
+    command -v php
     php -v | head -n 1
 
     if [ "$USE_COLORS" = "true" ]; then
@@ -358,12 +373,10 @@ function utils_diagnose_php_environment {
     fi
     if command -v php &>/dev/null; then
         local php_path
-        php_path=$(which php)
+        php_path=$(command -v php)
         printf "  Default PHP: %s\n" "$php_path"
         if [ -L "$php_path" ]; then
-            local real_path
-            real_path=$(readlink "$php_path")
-            printf "    → Symlinked to: %s\n" "$real_path"
+            printf "  Symlinked to: %s\n" "$(readlink "$php_path")"
         fi
         printf "  Version: %s\n" "$(php -v | head -n 1)"
     else
@@ -461,9 +474,11 @@ function utils_diagnose_php_environment {
     fi
     if command -v php &>/dev/null; then
         php -m | grep -v "\[" | sort | head -n 20
-        module_count=$(php -m | grep -v "\[" | wc -l)
-        if [ "$module_count" -gt 20 ]; then
-            echo "...and $(($module_count - 20)) more modules"
+        # grep -c always prints a count (0 on no match), so no `|| echo` fallback
+        local module_count
+        module_count=$(php -m | grep -c -v "\[")
+        if [ "${module_count:-0}" -gt 20 ]; then
+            echo "...and $((module_count - 20)) more modules"
         fi
     else
         echo "No PHP binary found to check modules"
@@ -529,7 +544,10 @@ function utils_diagnose_php_environment {
 
 # Function to validate system dependencies
 function utils_check_dependencies {
-    utils_show_status "info" "Checking dependencies..."
+    local silent="${1:-false}"
+    if [ "$silent" != "true" ]; then
+        utils_show_status "info" "Checking dependencies..."
+    fi
     
     # Check for Homebrew
     if ! command -v brew >/dev/null 2>&1; then
@@ -540,7 +558,8 @@ function utils_check_dependencies {
     fi
 
     # Check Homebrew version
-    local brew_version=$(brew --version | head -n 1 | grep -o "[0-9]\+\.[0-9]\+\.[0-9]\+" 2>/dev/null || echo "0.0.0")
+    local brew_version
+    brew_version=$(brew --version | head -n 1 | grep -o "[0-9]\+\.[0-9]\+\.[0-9]\+" 2>/dev/null || echo "0.0.0")
     local min_version="3.0.0"
     
     # Basic version comparison
@@ -580,7 +599,8 @@ function utils_check_dependencies {
     fi
     
     # Check for supported shell
-    local shell_type=$(shell_detect_shell)
+    local shell_type
+    shell_type=$(shell_detect_shell)
     if [ "$shell_type" = "unknown" ]; then
         utils_show_status "warning" "Unrecognized shell: $SHELL"
         echo "PHPSwitch works best with bash, zsh, or fish shells."
@@ -595,131 +615,95 @@ function utils_check_dependencies {
     fi
     
     # Check for write permissions in important directories
-    local brew_prefix="$(brew --prefix)"
+    local brew_prefix
+    brew_prefix="$(brew --prefix)"
     if [ ! -w "$brew_prefix/bin" ] && [ ! -w "/usr/local/bin" ]; then
         utils_show_status "warning" "Limited write permissions detected"
         echo "You may need to use sudo for some operations."
     fi
     
     # Enhanced cache directory check - using the core_get_cache_dir function
-    local cache_dir=$(core_get_cache_dir)
+    local cache_dir
+    cache_dir=$(core_get_cache_dir)
     
     # If the function returned a temporary directory, we've already fallen back
     if [[ "$cache_dir" == /tmp/* ]]; then
         utils_show_status "warning" "Using temporary cache directory: $cache_dir"
         echo "Cache will be lost on system reboot. To fix permanently, run:"
         echo "phpswitch --fix-permissions"
-        
-        # Try to create a more persistent cache directory for future use
-        local alt_cache="$HOME/.phpswitch_cache"
-        if [ ! -d "$alt_cache" ]; then
-            mkdir -p "$alt_cache" 2>/dev/null
-            if [ -d "$alt_cache" ] && [ -w "$alt_cache" ]; then
-                # Update config file for future runs
-                if [ -f "$HOME/.phpswitch.conf" ]; then
-                    utils_set_config_value "CACHE_DIRECTORY" "$alt_cache" "$HOME/.phpswitch.conf"
-                else
-                    # Create config file if it doesn't exist
-                    cat > "$HOME/.phpswitch.conf" << EOL
-# PHPSwitch Configuration
-AUTO_RESTART_PHP_FPM=true
-BACKUP_CONFIG_FILES=true
-DEFAULT_PHP_VERSION=""
-MAX_BACKUPS=5
-AUTO_SWITCH_PHP_VERSION=false
-CACHE_DIRECTORY="$alt_cache"
-EOL
-                fi
-            fi
-        fi
-    # If we're using the standard cache directory but it's not writable
     elif [ "$cache_dir" = "$HOME/.cache/phpswitch" ] && [ ! -w "$cache_dir" ]; then
         utils_show_status "warning" "Cache directory is not writable: $cache_dir"
-        printf "  This is a non-critical issue. PHPSwitch will use temporary directories instead.\n"
-        printf "  Fix the permissions now? (y/n) "
-        if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
-            # Check if we have the fix-permissions script
-            local script_dir="$(dirname "$(realpath "$0" 2>/dev/null || echo "$0")")"
-            local fix_script="$script_dir/tools/fix-permissions.sh"
-            
-            if [ -f "$fix_script" ]; then
-                utils_show_status "info" "Running permission fix script..."
-                bash "$fix_script"
-            else
-                # Try to fix permissions manually
-                utils_show_status "info" "Attempting to fix permissions manually..."
-                
-                # Try to fix with standard chmod first
-                chmod u+w "$cache_dir" 2>/dev/null
-                if [ ! -w "$cache_dir" ]; then
-                    # If that fails, try with sudo
-                    utils_show_status "info" "Trying with sudo..."
-                    sudo chmod u+w "$cache_dir" 2>/dev/null
-                    
-                    if [ ! -w "$cache_dir" ]; then
-                        # Try ownership change
-                        # Get secure username and validate it
-                        local username
-                        username="$(id -un)"
-                        if utils_validate_username "$username"; then
-                            sudo chown "$username" "$cache_dir" 2>/dev/null
-                        else
-                            utils_show_status "error" "Invalid username detected, skipping ownership change"
-                        fi
-                        
-                        if [ ! -w "$cache_dir" ]; then
-                            utils_show_status "error" "Could not fix permissions with standard methods"
-                            
-                            # Try to remove and recreate directory
-                            utils_show_status "info" "Trying to recreate the cache directory..."
-                            sudo rm -rf "$cache_dir" 2>/dev/null
-                            mkdir -p "$cache_dir" 2>/dev/null
-                            
-                            if [ ! -w "$cache_dir" ]; then
-                                # Create alternative directory
-                                local alt_cache="$HOME/.phpswitch_cache"
-                                mkdir -p "$alt_cache" 2>/dev/null
-                                
-                                if [ -d "$alt_cache" ] && [ -w "$alt_cache" ]; then
-                                    utils_show_status "success" "Created alternative cache directory: $alt_cache"
-                                    
-                                    # Update config file
-                                    if [ -f "$HOME/.phpswitch.conf" ]; then
-                                        utils_set_config_value "CACHE_DIRECTORY" "$alt_cache" "$HOME/.phpswitch.conf"
-                                    else
-                                        # Create config file if it doesn't exist
-                                        cat > "$HOME/.phpswitch.conf" << EOL
-# PHPSwitch Configuration
-AUTO_RESTART_PHP_FPM=true
-BACKUP_CONFIG_FILES=true
-DEFAULT_PHP_VERSION=""
-MAX_BACKUPS=5
-AUTO_SWITCH_PHP_VERSION=false
-CACHE_DIRECTORY="$alt_cache"
-EOL
-                                    fi
-                                else
-                                    utils_show_status "error" "Failed to create alternative cache directory"
-                                    echo "PHPSwitch will fall back to using temporary directories for this session."
-                                fi
-                            else
-                                utils_show_status "success" "Cache directory recreated successfully"
-                            fi
-                        else
-                            utils_show_status "success" "Permissions fixed by changing ownership"
-                        fi
-                    else
-                        utils_show_status "success" "Permissions fixed with sudo"
-                    fi
-                else
-                    utils_show_status "success" "Permissions fixed"
-                fi
-            fi
+        printf "  Run 'phpswitch --fix-permissions' to resolve this.\n"
+    fi
+    
+    if [ "$silent" != "true" ]; then
+        utils_show_status "success" "All critical dependencies satisfied"
+    fi
+    return 0
+}
+
+# CQ-07: Extracted permission-fix logic into its own function
+function utils_ensure_cache_writable {
+    local cache_dir="$1"
+    
+    if [ -w "$cache_dir" ]; then
+        return 0
+    fi
+    
+    utils_show_status "info" "Attempting to fix permissions for $cache_dir..."
+    
+    # Strategy 1: chmod
+    chmod u+w "$cache_dir" 2>/dev/null
+    if [ -w "$cache_dir" ]; then
+        utils_show_status "success" "Permissions fixed"
+        return 0
+    fi
+    
+    # Strategy 2: sudo chmod
+    utils_show_status "info" "Trying with sudo..."
+    sudo chmod u+w "$cache_dir" 2>/dev/null
+    if [ -w "$cache_dir" ]; then
+        utils_show_status "success" "Permissions fixed with sudo"
+        return 0
+    fi
+    
+    # Strategy 3: chown
+    local username
+    username="$(id -un)"
+    if utils_validate_username "$username"; then
+        sudo chown "$username" "$cache_dir" 2>/dev/null
+        if [ -w "$cache_dir" ]; then
+            utils_show_status "success" "Permissions fixed by changing ownership"
+            return 0
         fi
     fi
     
-    utils_show_status "success" "All critical dependencies satisfied"
-    return 0
+    # Strategy 4: Recreate directory
+    utils_show_status "info" "Trying to recreate the cache directory..."
+    sudo rm -rf "$cache_dir" 2>/dev/null
+    mkdir -p "$cache_dir" 2>/dev/null
+    if [ -d "$cache_dir" ] && [ -w "$cache_dir" ]; then
+        utils_show_status "success" "Cache directory recreated successfully"
+        return 0
+    fi
+    
+    # Strategy 5: Alternative directory
+    local alt_cache="$HOME/.phpswitch_cache"
+    mkdir -p "$alt_cache" 2>/dev/null
+    if [ -d "$alt_cache" ] && [ -w "$alt_cache" ]; then
+        utils_show_status "success" "Created alternative cache directory: $alt_cache"
+        if [ -f "$HOME/.phpswitch.conf" ]; then
+            utils_set_config_value "CACHE_DIRECTORY" "$alt_cache" "$HOME/.phpswitch.conf"
+        else
+            core_create_default_config
+            echo "CACHE_DIRECTORY=\"$alt_cache\"" >> "$HOME/.phpswitch.conf"
+        fi
+        return 0
+    fi
+    
+    utils_show_status "error" "All attempts to fix cache permissions failed"
+    echo "PHPSwitch will fall back to using temporary directories for this session."
+    return 1
 }
 
 # Function to compare semantic versions (returns true if version1 >= version2)
@@ -728,25 +712,25 @@ function utils_compare_versions {
     local version2="$2"
     
     # Extract major, minor, patch versions
-    local v1_parts=(${version1//./ })
-    local v2_parts=(${version2//./ })
+    IFS="." read -ra v1_parts <<< "$version1"
+    IFS="." read -ra v2_parts <<< "$version2"
     
     # Compare major version
-    if (( ${v1_parts[0]} > ${v2_parts[0]} )); then
+    if (( v1_parts[0] > v2_parts[0] )); then
         return 0
-    elif (( ${v1_parts[0]} < ${v2_parts[0]} )); then
+    elif (( v1_parts[0] < v2_parts[0] )); then
         return 1
     fi
     
     # Compare minor version
-    if (( ${v1_parts[1]} > ${v2_parts[1]} )); then
+    if (( v1_parts[1] > v2_parts[1] )); then
         return 0
-    elif (( ${v1_parts[1]} < ${v2_parts[1]} )); then
+    elif (( v1_parts[1] < v2_parts[1] )); then
         return 1
     fi
     
     # Compare patch version
-    if (( ${v1_parts[2]} >= ${v2_parts[2]} )); then
+    if (( v1_parts[2] >= v2_parts[2] )); then
         return 0
     else
         return 1
@@ -765,22 +749,26 @@ function utils_read_composer_version {
     # 1. Check config.platform.php (highest priority)
     # We look for "php": "X.Y" inside the file, hoping it's unique enough or we catch the right one.
     # To be safer without jq, we can try to look for the platform block
-    local platform_php=$(grep -A 10 '"platform"' "$composer_file" 2>/dev/null | grep '"php"' | head -n 1)
+    local platform_php
+    platform_php=$(grep -A 10 '"platform"' "$composer_file" 2>/dev/null | grep '"php"' | head -n 1)
     
     if [ -n "$platform_php" ]; then
         # Extract version: "php": "8.1.0" -> 8.1.0
-        local version=$(echo "$platform_php" | sed -E 's/.*"php": *"([^"]+)".*/\1/')
+        local version
+        version=$(echo "$platform_php" | sed -E 's/.*"php": *"([^"]+)".*/\1/')
         # extract major.minor
         echo "$version" | grep -oE '[0-9]+\.[0-9]+' | head -n 1
         return 0
     fi
     
     # 2. Check require.php
-    local require_php=$(grep -A 20 '"require"' "$composer_file" 2>/dev/null | grep '"php"' | head -n 1)
+    local require_php
+    require_php=$(grep -A 20 '"require"' "$composer_file" 2>/dev/null | grep '"php"' | head -n 1)
     
     if [ -n "$require_php" ]; then
         # Extract version: "php": "^8.1" -> 8.1
-        local version=$(echo "$require_php" | sed -E 's/.*"php": *"([^"]+)".*/\1/')
+        local version
+        version=$(echo "$require_php" | sed -E 's/.*"php": *"([^"]+)".*/\1/')
         # extract major.minor
         echo "$version" | grep -oE '[0-9]+\.[0-9]+' | head -n 1
         return 0
@@ -798,11 +786,13 @@ function utils_read_tool_versions {
     fi
     
     # Look for line starting with php
-    local php_line=$(grep "^php " "$tool_file" 2>/dev/null | head -n 1)
+    local php_line
+    php_line=$(grep "^php " "$tool_file" 2>/dev/null | head -n 1)
     
     if [ -n "$php_line" ]; then
         # Extract version: php 8.1.0 -> 8.1.0
-        local version=$(echo "$php_line" | awk '{print $2}')
+        local version
+        version=$(echo "$php_line" | awk '{print $2}')
         # extract major.minor
         echo "$version" | grep -oE '[0-9]+\.[0-9]+' | head -n 1
         return 0

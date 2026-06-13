@@ -1,8 +1,8 @@
 class Phpswitch < Formula
   desc "PHP Version Manager for macOS"
   homepage "https://github.com/NavanithanS/phpswitch"
-  url "https://github.com/NavanithanS/phpswitch/archive/refs/tags/v1.0.0.tar.gz"
-  sha256 "REPLACE_WITH_ACTUAL_SHA256"
+  url "https://github.com/NavanithanS/phpswitch/archive/refs/tags/v1.4.5.tar.gz"
+  sha256 "TODO_CALCULATE_AFTER_RELEASE_TAG" # Run: curl -sL <url> | shasum -a 256
   license "MIT"
 
   def install

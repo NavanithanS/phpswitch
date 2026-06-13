@@ -5,7 +5,6 @@
 # Function to manage PHP extensions
 function ext_manage_extensions {
     local php_version="$1"
-    local service_name=$(fpm_get_service_name "$php_version")
     
     # Extract the numeric version from php@X.Y
     local numeric_version
@@ -46,7 +45,10 @@ function ext_manage_extensions {
 
     if [ -d "$ini_dir" ]; then
         if [ -d "$ini_dir/conf.d" ]; then
-            ls -1 "$ini_dir/conf.d" | grep -i "\.ini$" | sed 's/^/    /'
+            for f in "$ini_dir/conf.d/"*.ini; do
+                [ -e "$f" ] || continue
+                echo "    $(basename "$f")"
+            done
         else
             printf "    No conf.d directory found at %s/conf.d\n" "$ini_dir"
         fi
@@ -97,17 +99,26 @@ function ext_manage_extensions {
                     if php -m | grep -q -i "^$ext_name$"; then
                         utils_show_status "info" "Extension $ext_name is already enabled"
                     else
+                        # SEC-05: Re-validate php_version before passing to brew
+                        if ! utils_validate_version "$php_version"; then
+                            utils_show_status "error" "Invalid PHP version format: $php_version"
+                            return 1
+                        fi
                         # Try to enable via Homebrew
                         if brew install "$php_version-$ext_name" 2>/dev/null; then
                             utils_show_status "success" "Extension $ext_name installed via Homebrew"
                             fpm_restart "$php_version"
                         else
                             utils_show_status "warning" "Could not install via Homebrew, trying PECL..."
-                            if pecl install "$ext_name"; then
-                                utils_show_status "success" "Extension $ext_name installed via PECL"
-                                fpm_restart "$php_version"
-                            else
-                                utils_show_status "error" "Failed to enable $ext_name"
+                            utils_show_status "warning" "PECL will download and compile C code from pecl.php.net"
+                            printf "  Continue with PECL install? (y/n) "
+                            if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
+                                if pecl install "$ext_name"; then
+                                    utils_show_status "success" "Extension $ext_name installed via PECL"
+                                    fpm_restart "$php_version"
+                                else
+                                    utils_show_status "error" "Failed to enable $ext_name"
+                                fi
                             fi
                         fi
                     fi
