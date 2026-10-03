@@ -33,6 +33,7 @@ load_modules() {
     source "$REPO_ROOT/phpswitch/lib/fpm.sh"
     source "$REPO_ROOT/phpswitch/lib/extensions.sh"
     source "$REPO_ROOT/phpswitch/lib/auto-switch.sh"
+    source "$REPO_ROOT/phpswitch/lib/init.sh"
     source "$REPO_ROOT/phpswitch/lib/commands.sh"
     HOMEBREW_PREFIX="$FAKE_BREW_PREFIX"
     BACKUP_CONFIG_FILES=true

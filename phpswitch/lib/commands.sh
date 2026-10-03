@@ -27,7 +27,7 @@ function cmd_parse_arguments {
     # Print header for all interactive/visible commands
     local _silent_flag=false
     case "$1" in
-        --auto-mode|--get-project-version|--version|-v|--help|-h|--quiet|-q|--json) _silent_flag=true ;;
+        --auto-mode|--get-project-version|--version|-v|--help|-h|--quiet|-q|--json|init|__php-dir|use|shell) _silent_flag=true ;;
     esac
     if [ "$_silent_flag" = "false" ] && [ "$PHPSWITCH_QUIET" != "true" ]; then
         if [ "$USE_COLORS" = "true" ]; then
@@ -43,7 +43,9 @@ function cmd_parse_arguments {
     # Skip dependency check for basic commands
     if [ "$1" != "--version" ] && [ "$1" != "-v" ] &&
        [ "$1" != "--help" ] && [ "$1" != "-h" ] &&
-       [ "$1" != "--check-dependencies" ] && [ "$1" != "--fix-permissions" ]; then
+       [ "$1" != "--check-dependencies" ] && [ "$1" != "--fix-permissions" ] &&
+       [ "$1" != "init" ] && [ "$1" != "__php-dir" ] &&
+       [ "$1" != "use" ] && [ "$1" != "shell" ]; then
         # Check dependencies
         utils_check_dependencies "$_silent_flag" || {
             utils_show_status "error" "Dependency check failed. Please resolve issues before proceeding."
@@ -51,6 +53,43 @@ function cmd_parse_arguments {
         }
     fi
     
+    # Per-shell integration and v2 subcommands
+    case "$1" in
+        init)
+            init_print "$2"
+            exit $?
+            ;;
+        __php-dir)
+            init_php_dir "$2"
+            exit $?
+            ;;
+        use|shell)
+            # Reaching the binary means the shell wrapper is not loaded
+            echo "phpswitch: '$1' changes PATH in the current shell and needs shell integration." >&2
+            echo "  Add this to your shell config, then open a new terminal:" >&2
+            echo "    eval \"\$(phpswitch init $(basename "${SHELL:-zsh}"))\"" >&2
+            echo "  Or switch globally instead: phpswitch global ${2:-VERSION}" >&2
+            exit 1
+            ;;
+        global)
+            if [ -z "$2" ] || ! utils_validate_version "$2"; then
+                utils_show_status "error" "Usage: phpswitch global <version>  (e.g. 8.2)"
+                exit 1
+            fi
+            cmd_non_interactive_switch "$2" "false"
+            exit $?
+            ;;
+        local)
+            # .php-version must hold X.Y (or php@X.Y) for detection to read it back
+            if ! [[ "${2:-}" =~ ^(php@)?[0-9]+\.[0-9]+$ ]]; then
+                utils_show_status "error" "Usage: phpswitch local <version>  (e.g. 8.2)"
+                exit 1
+            fi
+            version_set_project "$2"
+            exit $?
+            ;;
+    esac
+
     # Parse command-line arguments for non-interactive mode
     local version=""
     if [[ "$1" == --switch=* ]]; then
@@ -199,7 +238,12 @@ function cmd_parse_arguments {
         printf "\n  PHPSwitch  PHP Version Manager for macOS\n\n"
         printf "  Usage\n\n"
         printf "    phpswitch                            interactive menu\n"
-        printf "    phpswitch --switch=VERSION           switch to version\n"
+        printf "    phpswitch use VERSION|auto           use a version in this shell only (needs shell integration)\n"
+        printf "    phpswitch global VERSION             switch the global (Homebrew-linked) version\n"
+        printf "    phpswitch local VERSION              write .php-version in the current directory\n"
+        printf "    phpswitch init zsh|bash|fish         print shell integration; add to your rc file:\n"
+        printf "                                           eval \"\$(phpswitch init zsh)\"\n"
+        printf "    phpswitch --switch=VERSION           switch to version (same as global)\n"
         printf "    phpswitch --switch-force=VERSION     switch, installing if needed\n"
         printf "    phpswitch --install=VERSION          install a version\n"
         printf "    phpswitch --uninstall=VERSION        uninstall a version\n"
