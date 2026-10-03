@@ -1,21 +1,18 @@
 #!/usr/bin/env bats
 
-# Setup runs before each test
+load helpers/common
+
 setup() {
-    # Create a dummy config file in a temp directory
-    export HOME="$(mktemp -d)"
-    export PHPSWITCH_TEST_MODE=1
-    
-    # Path to the compiled script
-    export PHPSWITCH_BIN="${BATS_TEST_DIRNAME}/../php-switcher.sh"
-    
+    common_setup
+    export PHPSWITCH_BIN="$REPO_ROOT/php-switcher.sh"
+
     if [ ! -f "$PHPSWITCH_BIN" ]; then
         skip "Compiled php-switcher.sh not found. Run build.sh first."
     fi
 }
 
 teardown() {
-    rm -rf "$HOME"
+    common_teardown
 }
 
 @test "phpswitch executable exists" {

@@ -1,7 +1,33 @@
 #!/bin/bash
-# Fake brew for tests. Mimics `brew search` output, including the
-# "==> Formulae" header and installed-marker suffixes that real brew prints.
+# Fake brew for tests.
+#   FAKE_BREW_PREFIX  prefix reported by `brew --prefix` (required for link/unlink)
+#   FAKE_BREW_LIST    newline-separated formulae reported by `brew list`
+#   FAKE_BREW_LOG     if set, every invocation is appended to this file
+# `brew search` mimics real output, including the "==> Formulae" header,
+# tap prefixes and installed markers.
+[ -n "$FAKE_BREW_LOG" ] && printf '%s\n' "$*" >> "$FAKE_BREW_LOG"
+
+prefix="${FAKE_BREW_PREFIX:-/opt/homebrew}"
+
+# Last non-flag argument is the formula for link/unlink
+formula_arg() {
+    local arg formula=""
+    for arg in "$@"; do
+        case "$arg" in
+            -*) ;;
+            *) formula="$arg" ;;
+        esac
+    done
+    printf '%s\n' "$formula"
+}
+
 case "$1" in
+    --prefix)
+        printf '%s\n' "$prefix"
+        ;;
+    --version)
+        printf 'Homebrew 4.4.0\n'
+        ;;
     search)
         case "$2" in
             "/php@[0-9]/")
@@ -13,8 +39,23 @@ case "$1" in
                 ;;
         esac
         ;;
-    --prefix)
-        printf '%s\n' "${HOMEBREW_PREFIX:-/opt/homebrew}"
+    list)
+        if [ "$2" = "--versions" ] && [ "$3" = "php" ]; then
+            printf 'php 8.4.1\n'
+        else
+            printf '%s\n' "${FAKE_BREW_LIST:-}"
+        fi
+        ;;
+    link)
+        formula=$(formula_arg "${@:2}")
+        mkdir -p "$prefix/bin"
+        ln -sfn "../opt/$formula/bin/php" "$prefix/bin/php"
+        ;;
+    unlink)
+        rm -f "$prefix/bin/php"
+        ;;
+    services)
+        [ "$2" = "list" ] && printf 'Name Status User File\n'
         ;;
 esac
 exit 0
