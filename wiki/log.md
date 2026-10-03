@@ -24,3 +24,7 @@ Untracked build outputs, removed stale prepare-release script, made `config/defa
 ## [2026-10-03] ingest | Phase 1 test harness and CI
 
 Added [[concepts/testing]] (fake brew, isolated HOME, suites 03–07, CI pipeline). Marked Phase 1 done in [[decisions/roadmap-2026]] and recorded pre-existing issues found during testing. AGENTS.md gained testing conventions.
+
+## [2026-10-03] ingest | Phase 2 release & update hardening
+
+Added [[concepts/release-and-update]]. `--update` now uses the latest release and verifies its SHA-256 (fails closed), defers Homebrew installs to `brew upgrade`, and never downgrades. release.sh publishes the checksum asset. The repo formula is synced to the tap (v1.4.4). Marked Phase 2 done in [[decisions/roadmap-2026]].

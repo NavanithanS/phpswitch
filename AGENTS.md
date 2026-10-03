@@ -22,3 +22,7 @@ This repository includes a structured wiki in the `wiki/` directory that serves 
 - Never write `! cmd` as an assertion in bats, because it never fails a test. Use `run cmd` followed by `[ "$status" -ne 0 ]`.
 - Rebuild `php-switcher.sh` (`cd phpswitch && ./build.sh`) before committing. CI fails if the committed artifact doesn't match a fresh build.
 - CI (`.github/workflows/ci.yml`) runs shellcheck, the build-sync check and `bats tests/` on macOS. See `wiki/concepts/testing.md`.
+
+## 5. Releases
+- Always release with `tools/release.sh`. It bumps `PHPSWITCH_VERSION` in `config/defaults.sh`, creates a `vX.Y.Z` tag, and uploads `php-switcher.sh` together with `php-switcher.sh.sha256`, then patches the Homebrew formula.
+- `phpswitch --update` **refuses** any release that doesn't include `php-switcher.sh.sha256`, so never create releases by hand without it. See `wiki/concepts/release-and-update.md`.

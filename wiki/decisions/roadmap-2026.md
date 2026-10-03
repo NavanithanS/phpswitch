@@ -59,7 +59,7 @@ The `sleep 1` loop in `core.sh:280-284` is a timeout guard for `brew search`, so
 
 **Acceptance:** CI is green on master and a PR that forgets to rebuild fails.
 
-## Phase 2: Release and update hardening
+## Phase 2: Release and update hardening ✅ (done 2026-10-03, see [[concepts/release-and-update]])
 
 **Goal:** what users install is exactly what was released, and it's verified (fixes F3, F4).
 
@@ -70,7 +70,9 @@ The `sleep 1` loop in `core.sh:280-284` is a timeout guard for `brew search`, so
   - Remove the `TODO` placeholder logic entirely.
 - Optionally run this in a CI release job triggered by a `v*` tag.
 
-**Acceptance:** a tampered asset is rejected, and the formula installs cleanly with `brew install --build-from-source ./Formula/phpswitch.rb` in CI.
+**Acceptance:** a tampered asset is rejected (`tests/08_update.bats`). A CI formula install was dropped because the repo formula only becomes valid after a release; the repo copy is now synced to the tap's working v1.4.4 values.
+
+**Release state found on 2026-10-03:** the latest GitHub release is tagged `1.4.5` (no `v`) and has **no assets**. The tap ships v1.4.4. The next release must go through `tools/release.sh` so that `--update` has a checksum to verify against.
 
 ## Phase 3: Per-shell switching and a fast hook (v2.0)
 
@@ -129,6 +131,9 @@ Rough priority order. Confidence in brackets.
 | Phase 1 | Bash syntax error: a nested heredoc closes the outer one. The script is unused, since `--fix-permissions` lives in `commands.sh`. Delete it or repair it. | `tools/fix-permissions.sh:170` |
 | Phase 1 | With FPM restart on, each auto-switch *starts* the target FPM service even if FPM wasn't running before. | `lib/auto-switch.sh:403-407` |
 | Phase 1 | The upward search stops at `$HOME` using a prefix match, so `/Users/bobby` counts as inside `/Users/bob`. | `lib/version.sh:53` |
+| Phase 2 | `release.sh` runs `git add .` when bumping the version, which could commit stray files. | `tools/release.sh` |
+| Phase 2 | The README install command `curl`s from raw `master`, not a release asset. | `README.md:38` |
+| Phase 2 | The checksum is published by the same GitHub release as the script, so it doesn't protect against a compromised account. Consider minisign or `gh attestation`. | `lib/commands.sh` `cmd_update_self` |
 | Phase 1 | `--auto-mode` uses the fixed lock path `/tmp/phpswitch_<uid>.lock`, so tests share it with the real hook. | `phpswitch.sh`, build main block |
 
 ## Suggested sequencing

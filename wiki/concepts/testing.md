@@ -18,6 +18,7 @@ Every suite does `load helpers/common` (`tests/helpers/common.bash`). `common_se
 | `HOME=$TEST_ROOT/home` | rc files, `~/.phpswitch.conf` and caches stay in a throwaway directory |
 | `tests/helpers/bin/brew` placed first on `PATH` | Fake Homebrew. `search` returns realistic output (header, tap prefix, ✔ marker). `list` returns `$FAKE_BREW_LIST`. `link` and `unlink` really repoint `$FAKE_BREW_PREFIX/bin/php`. Every call is logged to `$FAKE_BREW_LOG`. |
 | `FAKE_BREW_PREFIX` | Fake Homebrew prefix. `core_load_config` picks it up through `brew --prefix`. |
+| `tests/helpers/bin/curl`, `tests/helpers/bin/sudo` | Fake curl serves `$FAKE_CURL_DIR` fixtures by URL (`fake_url <url> <file>`). Fake sudo always refuses, so tests never escalate. |
 | `load_modules` | Sources defaults and all lib modules in build order, for unit tests |
 | `fake_php_install php@X.Y` / `fake_php_link php@X.Y` | Create `opt/php@X.Y/bin/php` and point `bin/php` at it |
 
@@ -34,6 +35,7 @@ Unit tests call module functions directly. CLI tests (`07_cli.bats`) run the bui
 | `05_shell.bats` | rc file selection, managed-block insert and replace for zsh, bash and fish, backups |
 | `06_switch.bats` | unlink-before-link order, rc update, no-op when already active, `auto_switch_php` |
 | `07_cli.bats` | Flag dispatch and exit codes, `--get-project-version`, `--auto-mode` |
+| `08_update.bats` | `--update`: Homebrew deferral, no downgrade, checksum missing or mismatched, version mismatch, exit status |
 
 ## Gotchas
 

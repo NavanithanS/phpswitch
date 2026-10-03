@@ -40,7 +40,8 @@ Content catalog. Updated on every ingest. The LLM reads this first when answerin
 | [[concepts/auto-switch]] | `.php-version`, `composer.json`, `.tool-versions` detection on `cd` |
 | [[concepts/shell-patching]] | How PATH exports are appended/updated in shell rc files |
 | [[concepts/fpm-management]] | Starting, stopping, and restarting PHP-FPM per version |
-| [[concepts/testing]] | bats harness (fake brew, isolated HOME), suites, CI pipeline |
+| [[concepts/testing]] | bats harness (fake brew/curl/sudo, isolated HOME), suites, CI pipeline |
+| [[concepts/release-and-update]] | release.sh flow and the fail-closed, checksum-verified `--update` |
 
 ## Decisions
 
