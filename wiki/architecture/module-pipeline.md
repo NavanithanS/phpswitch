@@ -23,7 +23,8 @@ The build concatenates modules in a specific order. This order encodes the depen
 7. lib/extensions.sh      # PHP extension enable/disable/info
 8. lib/auto-switch.sh     # Legacy directory-based auto-switching hooks
 9. lib/init.sh           # Per-shell integration (init / __php-dir)
-10. lib/commands.sh       # CLI argument parsing and dispatch
+10. lib/doctor.sh        # Read-only health checks
+11. lib/commands.sh       # CLI argument parsing and dispatch
 --- (main block appended) ---
 ```
 

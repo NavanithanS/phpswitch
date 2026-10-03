@@ -95,6 +95,7 @@ phpswitch use VERSION|auto           use a version in this shell only (needs she
 phpswitch global VERSION             switch the global (Homebrew-linked) version
 phpswitch local VERSION              write .php-version in the current directory
 phpswitch init zsh|bash|fish         print shell integration code
+phpswitch doctor                     check your PHP setup (read-only)
 phpswitch --switch=VERSION           switch to version (same as global)
 phpswitch --switch-force=VERSION     switch, installing if needed
 phpswitch --install=VERSION          install a version

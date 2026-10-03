@@ -33,3 +33,6 @@ This repository includes a structured wiki in the `wiki/` directory that serves 
 - The hook's fast path must keep matching `version_check_project`. Any change to detection rules needs the parity test in `tests/09_shell_integration.bats` updated.
 - Generated code must be safe under `set -u`, and must only ever remove its own PATH entries.
 - Code that edits rc files must validate every change before writing any of them (all-or-nothing), back each file up, and write through with `>` (never `mv`) so symlinked dotfiles survive. Use the login shell (`$SHELL`), not `shell_detect_shell`, to pick the rc file. Test against the real legacy fixtures in `tests/fixtures/`.
+
+## 7. Doctor
+- `phpswitch doctor` must stay read-only (no network, sudo, writes or service calls). New checks go in `lib/doctor.sh` with a test in `tests/11_doctor.bats`. Don't add a second diagnostics path.

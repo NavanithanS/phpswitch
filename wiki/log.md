@@ -36,3 +36,7 @@ Added [[concepts/shell-integration]] for `lib/init.sh` (`init`, `use`/`local`/`g
 ## [2026-10-03] ingest | Phase 3b install and migration
 
 `--install-auto-switch` now installs the per-shell integration for the login shell and migrates legacy hooks from every rc file (all-or-nothing, backups, write-through for symlinked rc files). Documented in [[concepts/shell-integration]]. Added legacy fixtures and `10_install_auto_switch.bats`. Recorded the pre-existing `shell_detect_shell` and `.bash_profile` issues in [[decisions/roadmap-2026]].
+
+## [2026-10-03] ingest | Phase 4a doctor
+
+Added [[concepts/doctor]] (`lib/doctor.sh`), which replaced the two `utils_diagnose_*` functions; menu `d` now runs it. Roadmap: `use`/`local`/`global` and `--json` marked done; Valet and PECL deferred pending a user decision. Module order updated in CLAUDE.md and [[architecture/module-pipeline]].

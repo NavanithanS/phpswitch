@@ -43,6 +43,7 @@ Content catalog. Updated on every ingest. The LLM reads this first when answerin
 | [[concepts/fpm-management]] | Starting, stopping, and restarting PHP-FPM per version |
 | [[concepts/testing]] | bats harness (fake brew/curl/sudo, isolated HOME), suites, CI pipeline |
 | [[concepts/shell-integration]] | v2 per-shell switching: `init`, wrapper, pure-shell hook, invariants |
+| [[concepts/doctor]] | Read-only `phpswitch doctor` checks (PATH, integration, legacy hooks, FPM as root) |
 | [[concepts/release-and-update]] | release.sh flow and the fail-closed, checksum-verified `--update` |
 
 ## Decisions
