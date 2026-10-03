@@ -56,3 +56,7 @@ Added `lib/completions.sh` (`phpswitch completions bash|zsh|fish`), with a drift
 ## [2026-10-03] ingest | Phase 4d composer constraints
 
 `require.php` constraints are now resolved against installed series (historical answer first, then lowest satisfying, then fallback). Documented in [[concepts/auto-switch]]; roadmap updated.
+
+## [2026-10-03] lint | Phase 4e split commands.sh
+
+Split `lib/commands.sh` into `commands.sh` (dispatch), `menu.sh` and `self-manage.sh` as a pure move: the sorted `declare -f` output is identical for the module set and for the built artifact. Updated the module order everywhere, [[entities/lib-commands]], and the README tree (which also gained the previously missing `doctor.sh` and `completions.sh`).

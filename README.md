@@ -232,7 +232,11 @@ phpswitch/
     ├── extensions.sh     # extension enable/disable
     ├── auto-switch.sh    # legacy directory-based auto-switching hooks
     ├── init.sh           # per-shell integration (phpswitch init / use)
-    └── commands.sh       # CLI argument parsing and menu
+    ├── completions.sh    # shell completions (phpswitch completions)
+    ├── doctor.sh         # read-only health checks (phpswitch doctor)
+    ├── self-manage.sh    # --install / --uninstall / --update
+    ├── menu.sh           # interactive menu and configuration screens
+    └── commands.sh       # CLI argument parsing and dispatch
 ```
 
 The root `php-switcher.sh` is the built single-file distributable. Edit the modules under `phpswitch/lib/` and run `./phpswitch/build.sh` to regenerate it.

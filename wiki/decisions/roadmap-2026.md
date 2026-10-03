@@ -128,7 +128,7 @@ Rough priority order. Confidence in brackets.
 
 - **Reduce sudo (F8):** print the exact fix command instead of escalating. Keep `sudo` only for `/usr/local/bin` installs, and only when the user asks for it explicitly.
 - **Non-interactive mode:** `--yes` / `--no` flags, and auto-detect when there's no TTY (`[ -t 0 ]`), so prompts never hang in CI or scripts.
-- **Split `commands.sh` (F9):** `cmd/dispatch.sh`, `cmd/menu.sh`, `cmd/install.sh`, `cmd/update.sh`. Update the module order in `build.sh` and in [[architecture/module-pipeline]].
+- ✅ (4e, 2026-10-03; pure move verified by `declare -f`) **Split `commands.sh` (F9):** done as `commands.sh` (dispatch), `menu.sh` and `self-manage.sh`. The original plan was: `cmd/dispatch.sh`, `cmd/menu.sh`, `cmd/install.sh`, `cmd/update.sh`. Update the module order in `build.sh` and in [[architecture/module-pipeline]].
 
 ## Pre-existing issues found along the way (not yet fixed)
 

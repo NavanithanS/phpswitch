@@ -25,7 +25,9 @@ The build concatenates modules in a specific order. This order encodes the depen
 9. lib/init.sh           # Per-shell integration (init / __php-dir)
 10. lib/completions.sh   # Shell completion scripts
 11. lib/doctor.sh        # Read-only health checks
-12. lib/commands.sh       # CLI argument parsing and dispatch
+12. lib/self-manage.sh   # --install / --uninstall / --update
+13. lib/menu.sh          # Interactive menu and configuration screens
+14. lib/commands.sh       # CLI argument parsing and dispatch
 --- (main block appended) ---
 ```
 
