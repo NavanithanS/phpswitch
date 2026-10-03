@@ -36,6 +36,12 @@ eval "$(phpswitch init zsh)"     # bash: init bash; fish: phpswitch init fish | 
 
 Leaving a project removes the per-shell entry, so the global version shows through again.
 
+## Startup details
+
+- The init epilogue clears `_phpswitch_last_pwd` before its first hook call. That way re-sourcing the rc file inside a project re-applies the project's PHP, even though the global PATH block near the top of the rc file has just put the global version first again.
+- `init` runs from rc files, possibly before `brew shellenv`. If `brew` isn't on PATH, `core_load_config` falls back to `/opt/homebrew/bin/brew`, then `/usr/local/bin/brew`, overridable for tests with `PHPSWITCH_BREW_CANDIDATES`.
+- `_phpswitch_valid_dir` also rejects paths containing `/..`.
+
 ## Invariants (tested in `tests/09_shell_integration.bats`)
 
 - The hook gives the same result as `version_check_project` (parity test).

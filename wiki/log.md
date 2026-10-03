@@ -64,3 +64,7 @@ Split `lib/commands.sh` into `commands.sh` (dispatch), `menu.sh` and `self-manag
 ## [2026-10-03] lint | Stale page sweep after roadmap phases
 
 Updated [[overview]], [[entities/lib-auto-switch]] and [[concepts/auto-switch]] to describe v2 behaviour and the removed 1.x installers.
+
+## [2026-10-03] lint | Branch-wide review fixes
+
+Fixed: re-sourcing the rc file inside a project lost the per-shell version; `init` failed when `brew` wasn't on PATH (now falls back to the standard Homebrew locations). Hardening: `_phpswitch_valid_dir` rejects `/..`, and `auto_install` backs up the target rc file before rewriting legacy files. Documented in [[concepts/shell-integration]].
