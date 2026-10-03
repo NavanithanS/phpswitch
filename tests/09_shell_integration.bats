@@ -176,9 +176,11 @@ $script" ;;
             cd "$HOME/other"; _phpswitch_hook; php -v
             cd "$HOME/project"; phpswitch use auto; php -v'
         [ "$status" -eq 0 ]
-        [ "${lines[0]}" = "PHP 8.3.0 (cli)" ]
+        [ "${lines[0]}" = "phpswitch: this shell now uses php@8.3 (until 'phpswitch use auto')" ]
         [ "${lines[1]}" = "PHP 8.3.0 (cli)" ]
-        [ "${lines[2]}" = "PHP 8.2.0 (cli)" ]
+        [ "${lines[2]}" = "PHP 8.3.0 (cli)" ]
+        [ "${lines[3]}" = "phpswitch: following project files again (now php@8.2)" ]
+        [ "${lines[4]}" = "PHP 8.2.0 (cli)" ]
     done
 }
 
@@ -262,8 +264,9 @@ hook_dir() {
 
 @test "wrapper works in shells with nounset enabled" {
     for sh in bash zsh; do
-        run_shell "$sh" 'set -u; phpswitch use 8.2; php -v; phpswitch use; echo "rc=$?"'
-        [ "${lines[0]}" = "PHP 8.2.0 (cli)" ]
+        run_shell "$sh" 'set -u; phpswitch use 8.2; php -v; phpswitch use; echo "rc=$?"; cd /; phpswitch use auto'
+        [ "${lines[1]}" = "PHP 8.2.0 (cli)" ]
+        [[ "$output" =~ "following project files again (now global PHP)" ]]
         [[ "$output" =~ "usage: phpswitch use" ]]
         [[ "$output" =~ "rc=1" ]]
     done

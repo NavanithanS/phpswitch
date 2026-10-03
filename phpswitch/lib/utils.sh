@@ -285,10 +285,8 @@ function utils_validate_numeric_input {
 
 # Function to validate system dependencies
 function utils_check_dependencies {
-    local silent="${1:-false}"
-    if [ "$silent" != "true" ]; then
-        utils_show_status "info" "Checking dependencies..."
-    fi
+    # Only problems are reported; a passing check prints nothing.
+    # ($1 "silent" is still accepted for callers.)
     
     # Check for Homebrew
     if ! command -v brew >/dev/null 2>&1; then
@@ -377,9 +375,6 @@ function utils_check_dependencies {
         printf "  Run 'phpswitch --fix-permissions' to resolve this.\n"
     fi
     
-    if [ "$silent" != "true" ]; then
-        utils_show_status "success" "All critical dependencies satisfied"
-    fi
     return 0
 }
 

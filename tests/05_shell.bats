@@ -125,3 +125,28 @@ update_rc() {
     update_rc php@8.2
     [ -z "$(find "$HOME" -maxdepth 1 -name '.zshrc.bak.*')" ]
 }
+
+@test "updating the rc block to the same version is a no-op" {
+    use_shell zsh
+    printf 'export A=1\n' > "$HOME/.zshrc"
+    update_rc php@8.2
+    local before backups
+    before=$(shasum -a 256 "$HOME/.zshrc" | awk '{print $1}')
+    backups=$(find "$HOME" -maxdepth 1 -name '.zshrc.bak.*' | wc -l)
+    update_rc php@8.2
+    [ "$(shasum -a 256 "$HOME/.zshrc" | awk '{print $1}')" = "$before" ]
+    [ "$(find "$HOME" -maxdepth 1 -name '.zshrc.bak.*' | wc -l)" = "$backups" ]
+    update_rc php@8.1
+    grep -qF "opt/php@8.1/bin" "$HOME/.zshrc"
+}
+
+@test "same-version check only trusts the managed block itself" {
+    use_shell zsh
+    printf 'export A=1\n' > "$HOME/.zshrc"
+    update_rc php@8.4
+    # a stray copy of a header line outside the block must not count
+    printf '# Path configuration for PHP version: php@8.1\n' >> "$HOME/.zshrc"
+    update_rc php@8.1
+    run awk '/^# BEGIN PHPSWITCH/,/^# END PHPSWITCH/' "$HOME/.zshrc"
+    [[ "$output" =~ "opt/php@8.1/bin" ]]
+}

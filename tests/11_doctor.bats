@@ -103,3 +103,25 @@ run_doctor() {
     run grep -E '^(link|unlink|services|install|uninstall|sudo)' "$FAKE_BREW_LOG"
     [ "$status" -ne 0 ]
 }
+
+@test "unmanaged PHP PATH lines in rc files are flagged, managed block is not" {
+    cat > "$HOME/.zshrc" <<'RC'
+# BEGIN PHPSWITCH MANAGED BLOCK - DO NOT EDIT MANUALLY
+export PATH="/opt/homebrew/opt/php@8.4/bin:/opt/homebrew/opt/php@8.4/sbin:$PATH"
+# END PHPSWITCH MANAGED BLOCK
+# PHP version (managed by PHPSwitch)
+export PATH="/opt/homebrew/opt/php@7.4/bin:/opt/homebrew/opt/php@7.4/sbin:$PATH"
+# export PATH="/opt/homebrew/opt/php@8.1/bin:$PATH"
+export PKG_CONFIG_PATH="/opt/homebrew/opt/php@8.1/lib/pkgconfig"
+RC
+    printf 'set -gx PATH /opt/homebrew/opt/php@8.2/bin $PATH\n' > "$HOME/.config/fish/config.fish" 2>/dev/null || { mkdir -p "$HOME/.config/fish"; printf 'set -gx PATH /opt/homebrew/opt/php@8.2/bin $PATH\n' > "$HOME/.config/fish/config.fish"; }
+    run_doctor
+    [[ "$output" =~ "PHP PATH entry not managed by phpswitch in $HOME/.zshrc (line 5)" ]]
+    [[ "$output" =~ "in $HOME/.config/fish/config.fish (line 1)" ]]
+}
+
+@test "passing dependency checks print nothing" {
+    run_doctor
+    [[ ! "$output" =~ "Checking dependencies" ]]
+    [[ ! "$output" =~ "All critical dependencies" ]]
+}

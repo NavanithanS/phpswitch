@@ -136,6 +136,19 @@ function shell_update_rc {
         utils_show_status "error" "No write permission for $rc_file"
         exit 1
     fi
+
+    # Already configured for this version (judged only by the managed block's
+    # own header line): no rewrite, no backup churn
+    local managed_version
+    managed_version=$(awk '
+        /^# BEGIN PHPSWITCH MANAGED BLOCK/ { inside = 1; next }
+        inside && /^# END PHPSWITCH MANAGED BLOCK/ { exit }
+        inside && sub(/^# Path configuration for PHP version: /, "") { print; exit }
+    ' "$rc_file")
+    if [ -n "$managed_version" ] && [ "$managed_version" = "$new_version" ]; then
+        utils_show_status "info" "$rc_file already points at $new_version"
+        return 0
+    fi
     
     # Create backup (only if enabled)
     if [ "$BACKUP_CONFIG_FILES" = "true" ]; then

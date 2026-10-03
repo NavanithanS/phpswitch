@@ -55,3 +55,33 @@ teardown() {
     run grep -q '^services' "$FAKE_BREW_LOG"
     [ "$status" -ne 0 ]
 }
+
+@test "switching to the already-active version doesn't restart FPM or rewrite the rc file" {
+    local restarts="$TEST_ROOT/fpm_restarts"
+    fpm_restart() { echo "$1" >> "$restarts"; }
+    run version_switch_php php@8.2 true
+    [ "$status" -eq 0 ]
+    [ "$(wc -l < "$restarts" | tr -d ' ')" = "1" ]
+    local before
+    before=$(shasum -a 256 "$HOME/.zshrc" | awk '{print $1}')
+    local backups_before
+    backups_before=$(find "$HOME" -maxdepth 1 -name '.zshrc.bak.*' | wc -l)
+    run version_switch_php php@8.2 true
+    [ "$status" -eq 0 ]
+    [ "$(wc -l < "$restarts" | tr -d ' ')" = "1" ]
+    [ "$(shasum -a 256 "$HOME/.zshrc" | awk '{print $1}')" = "$before" ]
+    [ "$(find "$HOME" -maxdepth 1 -name '.zshrc.bak.*' | wc -l)" = "$backups_before" ]
+}
+
+@test "reinstalling the active version still restarts FPM" {
+    local restarts="$TEST_ROOT/fpm_restarts"
+    fpm_restart() { echo "$1" >> "$restarts"; }
+    fake_php_link php@8.2
+    mv "$FAKE_BREW_PREFIX/opt/php@8.2/bin/php" "$TEST_ROOT/php82"
+    # fake `brew reinstall` puts the binary back
+    brew() { [ "$1" = "reinstall" ] && cp "$TEST_ROOT/php82" "$FAKE_BREW_PREFIX/opt/php@8.2/bin/php"; command brew "$@"; }
+    run version_switch_php php@8.2 true <<< "y"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "Reinstallation successful" ]]
+    [ "$(wc -l < "$restarts" | tr -d ' ')" = "1" ]
+}

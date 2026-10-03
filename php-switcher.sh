@@ -763,10 +763,8 @@ function utils_validate_numeric_input {
 
 # Function to validate system dependencies
 function utils_check_dependencies {
-    local silent="${1:-false}"
-    if [ "$silent" != "true" ]; then
-        utils_show_status "info" "Checking dependencies..."
-    fi
+    # Only problems are reported; a passing check prints nothing.
+    # ($1 "silent" is still accepted for callers.)
     
     # Check for Homebrew
     if ! command -v brew >/dev/null 2>&1; then
@@ -855,9 +853,6 @@ function utils_check_dependencies {
         printf "  Run 'phpswitch --fix-permissions' to resolve this.\n"
     fi
     
-    if [ "$silent" != "true" ]; then
-        utils_show_status "success" "All critical dependencies satisfied"
-    fi
     return 0
 }
 
@@ -1296,6 +1291,19 @@ function shell_update_rc {
     if [ ! -w "$rc_file" ]; then
         utils_show_status "error" "No write permission for $rc_file"
         exit 1
+    fi
+
+    # Already configured for this version (judged only by the managed block's
+    # own header line): no rewrite, no backup churn
+    local managed_version
+    managed_version=$(awk '
+        /^# BEGIN PHPSWITCH MANAGED BLOCK/ { inside = 1; next }
+        inside && /^# END PHPSWITCH MANAGED BLOCK/ { exit }
+        inside && sub(/^# Path configuration for PHP version: /, "") { print; exit }
+    ' "$rc_file")
+    if [ -n "$managed_version" ] && [ "$managed_version" = "$new_version" ]; then
+        utils_show_status "info" "$rc_file already points at $new_version"
+        return 0
     fi
     
     # Create backup (only if enabled)
@@ -2096,6 +2104,9 @@ function version_switch_php {
     local current_version
     current_version=$(core_get_current_php_version)
     
+    # Whether anything FPM depends on changed (a relink or a reinstall)
+    local version_changed=false
+
     # Resolve potential version confusion (php@8.4 vs php@default)
     new_version=$(version_resolve_php_version "$new_version")
     
@@ -2167,6 +2178,7 @@ function version_switch_php {
                     exit 1
                 else
                     utils_show_status "success" "Reinstallation successful"
+                    version_changed=true
                 fi
             else
                 utils_show_status "info" "Skipping reinstallation. Proceeding with version switch..."
@@ -2177,6 +2189,7 @@ function version_switch_php {
     if [ "$current_version" = "$new_version" ]; then
         utils_show_status "info" "$new_version is already active in Homebrew"
     else
+        version_changed=true
         utils_show_status "info" "Switching from $current_version to $new_version..."
 
         # Unlink current PHP (if any)
@@ -2235,8 +2248,10 @@ function version_switch_php {
     local reload_script
     reload_script=$(shell_create_reload_script "$new_version")
     
-    # Restart PHP-FPM if it's being used
-    fpm_restart "$new_version"
+    # Restart PHP-FPM if it's being used (not when nothing changed)
+    if [ "$version_changed" = "true" ]; then
+        fpm_restart "$new_version"
+    fi
     
     utils_show_status "success" "PHP version switched to $new_version"
     
@@ -3211,6 +3226,11 @@ phpswitch() {
                 unset PHPSWITCH_PINNED
                 _phpswitch_last_pwd=""
                 _phpswitch_hook
+                if [ -n "${PHPSWITCH_PHP_DIR:-}" ]; then
+                    echo "phpswitch: following project files again (now ${PHPSWITCH_PHP_DIR##*/})"
+                else
+                    echo "phpswitch: following project files again (now global PHP)"
+                fi
                 return 0
             fi
             if [ -z "${2:-}" ]; then
@@ -3224,6 +3244,7 @@ phpswitch() {
             fi
             export PHPSWITCH_PINNED=1
             _phpswitch_apply "$d"
+            echo "phpswitch: this shell now uses ${d##*/} (until 'phpswitch use auto')"
             ;;
         local|global)
             "$PHPSWITCH_BIN" "$@"
@@ -3324,6 +3345,11 @@ function phpswitch
                 set -e PHPSWITCH_PINNED
                 set -g _phpswitch_last_pwd ""
                 _phpswitch_hook
+                if set -q PHPSWITCH_PHP_DIR
+                    echo "phpswitch: following project files again (now "(string replace -r '.*/' '' -- $PHPSWITCH_PHP_DIR)")"
+                else
+                    echo "phpswitch: following project files again (now global PHP)"
+                end
                 return 0
             end
             if test -z "$argv[2]"
@@ -3337,6 +3363,7 @@ function phpswitch
             end
             set -gx PHPSWITCH_PINNED 1
             _phpswitch_apply $d
+            echo "phpswitch: this shell now uses "(string replace -r '.*/' '' -- $d)" (until 'phpswitch use auto')"
         case local global
             $PHPSWITCH_BIN $argv
             set -l rc $status
@@ -3651,6 +3678,21 @@ function doctor_run {
         doctor_warn "Legacy auto-switch hook found in: $legacy" \
             "It relinks PHP globally on every cd. Run: phpswitch --install-auto-switch"
     fi
+
+    # 6b. PHP PATH entries in rc files that phpswitch doesn't manage
+    local rc unmanaged
+    for rc in "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" "$HOME/.config/fish/config.fish"; do
+        [ -f "$rc" ] || continue
+        unmanaged=$(awk '
+            /^# BEGIN PHPSWITCH MANAGED BLOCK/ { inside = 1; next }
+            /^# END PHPSWITCH MANAGED BLOCK/   { inside = 0; next }
+            !inside && /^[ \t]*(export[ \t]+PATH=|PATH=|set[ \t]+(-[a-zA-Z]+[ \t]+)*PATH[ \t]|fish_add_path[ \t])/ && /\/opt\/php/ { printf "%s%d", sep, NR; sep = "," }
+        ' "$rc")
+        if [ -n "$unmanaged" ]; then
+            doctor_warn "PHP PATH entry not managed by phpswitch in $rc (line $unmanaged)" \
+                "It pins a PHP version in every new shell; remove it if per-shell or global switching should decide"
+        fi
+    done
 
     # 7. Project version for the current directory
     local project project_dir

@@ -218,6 +218,11 @@ phpswitch() {
                 unset PHPSWITCH_PINNED
                 _phpswitch_last_pwd=""
                 _phpswitch_hook
+                if [ -n "${PHPSWITCH_PHP_DIR:-}" ]; then
+                    echo "phpswitch: following project files again (now ${PHPSWITCH_PHP_DIR##*/})"
+                else
+                    echo "phpswitch: following project files again (now global PHP)"
+                fi
                 return 0
             fi
             if [ -z "${2:-}" ]; then
@@ -231,6 +236,7 @@ phpswitch() {
             fi
             export PHPSWITCH_PINNED=1
             _phpswitch_apply "$d"
+            echo "phpswitch: this shell now uses ${d##*/} (until 'phpswitch use auto')"
             ;;
         local|global)
             "$PHPSWITCH_BIN" "$@"
@@ -331,6 +337,11 @@ function phpswitch
                 set -e PHPSWITCH_PINNED
                 set -g _phpswitch_last_pwd ""
                 _phpswitch_hook
+                if set -q PHPSWITCH_PHP_DIR
+                    echo "phpswitch: following project files again (now "(string replace -r '.*/' '' -- $PHPSWITCH_PHP_DIR)")"
+                else
+                    echo "phpswitch: following project files again (now global PHP)"
+                end
                 return 0
             end
             if test -z "$argv[2]"
@@ -344,6 +355,7 @@ function phpswitch
             end
             set -gx PHPSWITCH_PINNED 1
             _phpswitch_apply $d
+            echo "phpswitch: this shell now uses "(string replace -r '.*/' '' -- $d)" (until 'phpswitch use auto')"
         case local global
             $PHPSWITCH_BIN $argv
             set -l rc $status

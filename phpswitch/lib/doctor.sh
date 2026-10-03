@@ -127,6 +127,21 @@ function doctor_run {
             "It relinks PHP globally on every cd. Run: phpswitch --install-auto-switch"
     fi
 
+    # 6b. PHP PATH entries in rc files that phpswitch doesn't manage
+    local rc unmanaged
+    for rc in "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" "$HOME/.config/fish/config.fish"; do
+        [ -f "$rc" ] || continue
+        unmanaged=$(awk '
+            /^# BEGIN PHPSWITCH MANAGED BLOCK/ { inside = 1; next }
+            /^# END PHPSWITCH MANAGED BLOCK/   { inside = 0; next }
+            !inside && /^[ \t]*(export[ \t]+PATH=|PATH=|set[ \t]+(-[a-zA-Z]+[ \t]+)*PATH[ \t]|fish_add_path[ \t])/ && /\/opt\/php/ { printf "%s%d", sep, NR; sep = "," }
+        ' "$rc")
+        if [ -n "$unmanaged" ]; then
+            doctor_warn "PHP PATH entry not managed by phpswitch in $rc (line $unmanaged)" \
+                "It pins a PHP version in every new shell; remove it if per-shell or global switching should decide"
+        fi
+    done
+
     # 7. Project version for the current directory
     local project project_dir
     if project=$(version_check_project 2>/dev/null) && [ -n "$project" ]; then

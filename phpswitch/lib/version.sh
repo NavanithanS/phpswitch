@@ -445,6 +445,9 @@ function version_switch_php {
     local current_version
     current_version=$(core_get_current_php_version)
     
+    # Whether anything FPM depends on changed (a relink or a reinstall)
+    local version_changed=false
+
     # Resolve potential version confusion (php@8.4 vs php@default)
     new_version=$(version_resolve_php_version "$new_version")
     
@@ -516,6 +519,7 @@ function version_switch_php {
                     exit 1
                 else
                     utils_show_status "success" "Reinstallation successful"
+                    version_changed=true
                 fi
             else
                 utils_show_status "info" "Skipping reinstallation. Proceeding with version switch..."
@@ -526,6 +530,7 @@ function version_switch_php {
     if [ "$current_version" = "$new_version" ]; then
         utils_show_status "info" "$new_version is already active in Homebrew"
     else
+        version_changed=true
         utils_show_status "info" "Switching from $current_version to $new_version..."
 
         # Unlink current PHP (if any)
@@ -584,8 +589,10 @@ function version_switch_php {
     local reload_script
     reload_script=$(shell_create_reload_script "$new_version")
     
-    # Restart PHP-FPM if it's being used
-    fpm_restart "$new_version"
+    # Restart PHP-FPM if it's being used (not when nothing changed)
+    if [ "$version_changed" = "true" ]; then
+        fpm_restart "$new_version"
+    fi
     
     utils_show_status "success" "PHP version switched to $new_version"
     
