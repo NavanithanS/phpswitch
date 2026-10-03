@@ -1,341 +1,212 @@
 #!/bin/bash
 # PHPSwitch Auto-switching
-# Handles automatic PHP version switching based on directory
+# Installs per-shell integration into rc files (migrating the legacy hook)
+# and keeps the legacy global auto-switch (--auto-mode) for unmigrated users
 
-# Function to install auto-switching hooks
+# Marker for the per-shell integration line written to rc files
+AUTO_INIT_MARKER="# PHPSwitch shell integration"
+
+# Legacy hook block (v1.4.1+): starts with this exact line and ends with the
+# first following line that is exactly "phpswitch_auto_detect_project".
+AUTO_LEGACY_START="# PHPSwitch auto-switching"
+AUTO_LEGACY_END="phpswitch_auto_detect_project"
+AUTO_LEGACY_MAX_LINES=100
+
+# rc file used for the integration line
+function auto_rc_file {
+    case "$1" in
+        zsh) printf '%s\n' "$HOME/.zshrc" ;;
+        bash)
+            if [ -f "$HOME/.bashrc" ]; then
+                printf '%s\n' "$HOME/.bashrc"
+            elif [ -f "$HOME/.bash_profile" ]; then
+                printf '%s\n' "$HOME/.bash_profile"
+            else
+                printf '%s\n' "$HOME/.bashrc"
+            fi
+            ;;
+        fish) printf '%s\n' "$HOME/.config/fish/config.fish" ;;
+        *) return 1 ;;
+    esac
+}
+
+# Back up an rc file next to itself (owner-only permissions)
+function auto_backup_rc {
+    local rc_file="$1"
+    [ -f "$rc_file" ] || return 0
+    local backup_file
+    backup_file="${rc_file}.bak.$(date +%Y%m%d%H%M%S)"
+    utils_validate_path "$backup_file" || return 1
+    cp "$rc_file" "$backup_file" || return 1
+    chmod 600 "$backup_file" 2>/dev/null
+    utils_show_status "info" "Created backup at $backup_file"
+}
+
+# Print rc content with legacy hook blocks removed.
+# Exit 0: blocks removed (output is the new content)
+# Exit 1: no legacy block present
+# Exit 2: a legacy block was found that cannot be removed safely
+function auto_strip_legacy_hooks {
+    local rc_file="$1"
+    grep -q "phpswitch_auto_detect_project" "$rc_file" 2>/dev/null || return 1
+
+    # v1.4.0 blocks have no reliable end anchor
+    if grep -qx "# PHPSwitch auto-switching hooks" "$rc_file"; then
+        return 2
+    fi
+
+    local stripped
+    stripped=$(awk -v start="$AUTO_LEGACY_START" -v end_line="$AUTO_LEGACY_END" -v max="$AUTO_LEGACY_MAX_LINES" '
+        { lines[NR] = $0 }
+        END {
+            n = 0
+            i = 1
+            while (i <= NR) {
+                if (lines[i] == start) {
+                    j = i + 1
+                    while (j <= NR && j - i <= max && lines[j] != end_line) j++
+                    if (j > NR || j - i > max) exit 2
+                    # drop the blank separator line written before the block
+                    if (n > 0 && out[n] == "") n--
+                    i = j + 1
+                    continue
+                }
+                out[++n] = lines[i]
+                i++
+            }
+            for (k = 1; k <= n; k++) print out[k]
+        }
+    ' "$rc_file") || return 2
+
+    # Anything still referencing the legacy hook is an unknown variant
+    if printf '%s\n' "$stripped" | grep -q "phpswitch_auto_detect_project"; then
+        return 2
+    fi
+    printf '%s\n' "$stripped"
+}
+
+# Integration line for an rc file, using this script's absolute path
+function auto_init_line {
+    local shell_type="$1" self
+    self=$(init_self_path)
+    case "$self" in
+        *"'"*|*$'\n'*|*\\*) return 1 ;;
+    esac
+    if [ "$shell_type" = "fish" ]; then
+        printf "test -x '%s'; and '%s' init fish | source\n" "$self" "$self"
+    else
+        printf "[ -x '%s' ] && eval \"\$('%s' init %s)\"\n" "$self" "$self" "$shell_type"
+    fi
+}
+
+# The user's login shell. shell_detect_shell can't be used here: phpswitch
+# itself runs under bash, so it would always answer "bash".
+function auto_login_shell {
+    local shell_name
+    shell_name=$(basename "${SHELL:-}")
+    case "$shell_name" in
+        zsh|bash|fish) printf '%s\n' "$shell_name" ;;
+        *) return 1 ;;
+    esac
+}
+
+# Every rc file a legacy installer may have written to
+function auto_legacy_rc_candidates {
+    local f
+    for f in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" "$HOME/.config/fish/config.fish"; do
+        [ -f "$f" ] && grep -q "phpswitch_auto_detect_project" "$f" 2>/dev/null && printf '%s\n' "$f"
+    done
+}
+
+# Install per-shell integration into the login shell's rc file and remove the
+# legacy global-switching hook from every rc file. Every legacy block is
+# checked before anything is written: on any doubt, all files stay
+# byte-identical.
 function auto_install {
     local shell_type
-    shell_type=$(shell_detect_shell)
-    
-    utils_show_status "info" "Setting up auto-switching for $shell_type shell..."
-    
-    case "$shell_type" in
-        "zsh")
-            auto_install_zsh
-            ;;
-        "bash")
-            auto_install_bash
-            ;;
-        "fish")
-            auto_install_fish
-            ;;
-        *)
-            utils_show_status "error" "Unsupported shell: $SHELL"
-            printf "  Auto-switching is only supported for bash, zsh, and fish shells.\n"
+    if ! shell_type=$(auto_login_shell); then
+        utils_show_status "error" "Unsupported login shell: ${SHELL:-unknown}"
+        printf "  Per-shell switching supports bash, zsh and fish.\n"
+        return 1
+    fi
+    local rc_file
+    rc_file=$(auto_rc_file "$shell_type")
+
+    local init_line
+    if ! init_line=$(auto_init_line "$shell_type"); then
+        utils_show_status "error" "Cannot reference phpswitch from $rc_file: unsupported characters in its path"
+        return 1
+    fi
+
+    # 1. Check every legacy block before changing anything
+    local legacy_files=() unsafe_files=() f
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        legacy_files+=("$f")
+        auto_strip_legacy_hooks "$f" > /dev/null
+        [ $? -eq 2 ] && unsafe_files+=("$f")
+    done < <(auto_legacy_rc_candidates)
+
+    if [ ${#unsafe_files[@]} -gt 0 ]; then
+        utils_show_status "error" "Found an older PHPSwitch auto-switching block that can't be removed automatically"
+        for f in "${unsafe_files[@]}"; do
+            printf "    %s\n" "$f"
+        done
+        printf "  No files were changed. Remove the block containing 'phpswitch_auto_detect_project'\n"
+        printf "  by hand, then run this again. Or add this line to %s yourself:\n\n    %s\n\n" "$rc_file" "$init_line"
+        return 1
+    fi
+
+    for f in "${legacy_files[@]}" "$rc_file"; do
+        if [ -e "$f" ] && [ ! -w "$f" ]; then
+            utils_show_status "error" "No write permission for $f; no files were changed"
             return 1
-            ;;
-    esac
-    
-    # Update config file
+        fi
+    done
+
+    # 2. Remove legacy blocks (they relink PHP globally on every cd).
+    # Write through (cat >) so symlinked rc files and their permissions survive.
+    local content
+    for f in "${legacy_files[@]}"; do
+        content=$(auto_strip_legacy_hooks "$f") || continue
+        auto_backup_rc "$f" || {
+            utils_show_status "error" "Could not back up $f; leaving it unchanged"
+            return 1
+        }
+        printf '%s\n' "$content" > "$f"
+        utils_show_status "success" "Removed the legacy auto-switching hook from $f"
+    done
+    if [ ${#legacy_files[@]} -gt 0 ]; then
+        rm -f "$HOME/.cache/phpswitch/directory_cache.txt" 2>/dev/null
+    fi
+
+    # 3. Add the integration line to the login shell's rc file
+    mkdir -p "$(dirname "$rc_file")" 2>/dev/null
+    if [ -f "$rc_file" ] && grep -qF "$AUTO_INIT_MARKER" "$rc_file"; then
+        utils_show_status "info" "Per-shell switching is already set up in $rc_file"
+    else
+        # Skip a second backup if this file was just migrated
+        local migrated=false
+        for f in "${legacy_files[@]}"; do
+            [ "$f" = "$rc_file" ] && migrated=true
+        done
+        if [ "$migrated" = "false" ]; then
+            auto_backup_rc "$rc_file" || {
+                utils_show_status "error" "Could not back up $rc_file; leaving it unchanged"
+                return 1
+            }
+        fi
+        printf '\n%s\n%s\n' "$AUTO_INIT_MARKER" "$init_line" >> "$rc_file"
+        utils_show_status "success" "Added per-shell switching to $rc_file"
+    fi
+
     if [ -f "$HOME/.phpswitch.conf" ]; then
         utils_set_config_value "AUTO_SWITCH_PHP_VERSION" "true" "$HOME/.phpswitch.conf"
     fi
-    
-    # Create cache directory with proper permissions
-    local cache_dir="$HOME/.cache/phpswitch"
-    if [ ! -d "$cache_dir" ]; then
-        mkdir -p "$cache_dir" 2>/dev/null
-    fi
-    
-    # Ensure cache directory is writable
-    if [ ! -w "$cache_dir" ] && [ -d "$cache_dir" ]; then
-        utils_show_status "warning" "Cache directory $cache_dir is not writable"
-        printf "  Fix permissions (may require sudo)? (y/n) "
-        if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
-            # Try to fix permissions, first without sudo
-            chmod u+w "$cache_dir" 2>/dev/null
-            if [ ! -w "$cache_dir" ]; then
-                # If that fails, try with sudo
-                utils_show_status "info" "Trying with sudo..."
-                sudo chmod u+w "$cache_dir" 2>/dev/null
-                if [ ! -w "$cache_dir" ]; then
-                    utils_show_status "error" "Could not fix permissions on $cache_dir"
-                    utils_show_status "warning" "Auto-switching will still work but will be slower without caching"
-                else
-                    utils_show_status "success" "Fixed permissions on $cache_dir"
-                fi
-            else
-                utils_show_status "success" "Fixed permissions on $cache_dir"
-            fi
-        else
-            utils_show_status "warning" "Auto-switching will still work but will be slower without caching"
-        fi
-    fi
-    
-    utils_show_status "success" "Auto-switching enabled"
-    printf "  Auto-switching will take effect the next time you open a new terminal.\n"
+
+    printf "  Open a new terminal (or reload %s) to start using it.\n" "$rc_file"
+    printf "  Each shell now follows the project's PHP version on cd; use 'phpswitch use VERSION' to pin one.\n"
     return 0
-}
-
-# Function to install auto-switching for zsh
-function auto_install_zsh {
-    local rc_file="$HOME/.zshrc"
-    
-    # Check if hooks are already installed
-    if grep -q "phpswitch_auto_detect_project" "$rc_file" 2>/dev/null; then
-        utils_show_status "info" "Auto-switching hooks already installed in $rc_file"
-        return 0
-    fi
-    
-    # Create backup before modifying
-    if [ -f "$rc_file" ]; then
-        local backup_file
-        backup_file="${rc_file}.bak.$(date +%Y%m%d%H%M%S)"
-        
-        # Validate backup file path
-        if utils_validate_path "$backup_file"; then
-            if cp "$rc_file" "$backup_file" 2>/dev/null; then
-                # Set secure permissions (readable/writable by owner only)
-                chmod 600 "$backup_file" 2>/dev/null
-                utils_show_status "info" "Created secure backup at ${backup_file}"
-            fi
-        fi
-    fi
-    
-    # Add the hook function to the rc file
-    # CQ-01: Simplified hook — delegates all logic to phpswitch --auto-mode
-    cat >> "$rc_file" << 'EOL'
-
-# PHPSwitch auto-switching
-function phpswitch_auto_detect_project() {
-    local cache_file="$HOME/.cache/phpswitch/directory_cache.txt"
-    local current_dir="$(pwd)"
-    local _max_cache_lines=500
-    
-    mkdir -p "$(dirname "$cache_file")" 2>/dev/null
-    
-    # Check if in cache
-    if [ -f "$cache_file" ] && [ -r "$cache_file" ]; then
-        while IFS=: read -r dir version; do
-            if [ "$dir" = "$current_dir" ]; then
-                # SEC-06: Re-validate version from cache
-                if [ -n "$version" ] && [[ "$version" =~ ^[a-zA-Z0-9.@_-]+$ ]]; then
-                    phpswitch --auto-mode > /dev/null 2>&1
-                fi
-                return
-            fi
-        done < "$cache_file"
-    fi
-    
-    # Not in cache — detect and cache
-    local _detected=""
-    for file in ".php-version" ".phpversion"; do
-        if [ -f "$current_dir/$file" ]; then
-            _detected=$(tr -d '[:space:]' < "$current_dir/$file" 2>/dev/null)
-            break
-        fi
-    done
-    if [ -z "$_detected" ] && { [ -f "$current_dir/composer.json" ] || [ -f "$current_dir/.tool-versions" ]; }; then
-        _detected=$(phpswitch --get-project-version 2>/dev/null)
-    fi
-    
-    # Append to cache (with pruning)
-    if [ -n "$_detected" ] && [[ "$_detected" =~ ^[a-zA-Z0-9.@_-]+$ ]]; then
-        printf '%s:%s\n' "$current_dir" "$_detected" >> "$cache_file" 2>/dev/null
-        phpswitch --auto-mode > /dev/null 2>&1
-    else
-        printf '%s:\n' "$current_dir" >> "$cache_file" 2>/dev/null
-    fi
-    
-    # PERF-03: Prune cache if too large
-    if [ -f "$cache_file" ] && [ "$(wc -l < "$cache_file" 2>/dev/null)" -gt "$_max_cache_lines" ]; then
-        tail -n "$_max_cache_lines" "$cache_file" > "$cache_file.tmp" 2>/dev/null && mv "$cache_file.tmp" "$cache_file" 2>/dev/null
-    fi
-}
-
-# Hook into directory changes
-autoload -U add-zsh-hook
-add-zsh-hook chpwd phpswitch_auto_detect_project
-
-# Run once when shell starts
-phpswitch_auto_detect_project
-EOL
-    
-    utils_show_status "success" "Added auto-switching hooks to $rc_file"
-}
-
-# Function to install auto-switching for bash
-function auto_install_bash {
-    local rc_file="$HOME/.bashrc"
-    
-    # If .bashrc doesn't exist, check for bash_profile
-    if [ ! -f "$rc_file" ]; then
-        rc_file="$HOME/.bash_profile"
-    fi
-    
-    # If neither exists, check for profile
-    if [ ! -f "$rc_file" ]; then
-        rc_file="$HOME/.profile"
-    fi
-    
-    # Check if hooks are already installed
-    if grep -q "phpswitch_auto_detect_project" "$rc_file" 2>/dev/null; then
-        utils_show_status "info" "Auto-switching hooks already installed in $rc_file"
-        return 0
-    fi
-    
-    # Create backup before modifying
-    if [ -f "$rc_file" ]; then
-        local backup_file
-        backup_file="${rc_file}.bak.$(date +%Y%m%d%H%M%S)"
-        
-        # Validate backup file path
-        if utils_validate_path "$backup_file"; then
-            if cp "$rc_file" "$backup_file" 2>/dev/null; then
-                # Set secure permissions (readable/writable by owner only)
-                chmod 600 "$backup_file" 2>/dev/null
-                utils_show_status "info" "Created secure backup at ${backup_file}"
-            fi
-        fi
-    fi
-    
-    # Add the hook function to the rc file
-    # CQ-01: Simplified hook — delegates all logic to phpswitch --auto-mode
-    cat >> "$rc_file" << 'EOL'
-
-# PHPSwitch auto-switching
-function phpswitch_auto_detect_project() {
-    local cache_file="$HOME/.cache/phpswitch/directory_cache.txt"
-    local current_dir="$(pwd)"
-    local _max_cache_lines=500
-    
-    mkdir -p "$(dirname "$cache_file")" 2>/dev/null
-    
-    # Check if in cache
-    if [ -f "$cache_file" ] && [ -r "$cache_file" ]; then
-        while IFS=: read -r dir version; do
-            if [ "$dir" = "$current_dir" ]; then
-                if [ -n "$version" ] && [[ "$version" =~ ^[a-zA-Z0-9.@_-]+$ ]]; then
-                    phpswitch --auto-mode > /dev/null 2>&1
-                fi
-                return
-            fi
-        done < "$cache_file"
-    fi
-    
-    # Not in cache — detect and cache
-    local _detected=""
-    for file in ".php-version" ".phpversion"; do
-        if [ -f "$current_dir/$file" ]; then
-            _detected=$(tr -d '[:space:]' < "$current_dir/$file" 2>/dev/null)
-            break
-        fi
-    done
-    if [ -z "$_detected" ] && { [ -f "$current_dir/composer.json" ] || [ -f "$current_dir/.tool-versions" ]; }; then
-        _detected=$(phpswitch --get-project-version 2>/dev/null)
-    fi
-    
-    if [ -n "$_detected" ] && [[ "$_detected" =~ ^[a-zA-Z0-9.@_-]+$ ]]; then
-        printf '%s:%s\n' "$current_dir" "$_detected" >> "$cache_file" 2>/dev/null
-        phpswitch --auto-mode > /dev/null 2>&1
-    else
-        printf '%s:\n' "$current_dir" >> "$cache_file" 2>/dev/null
-    fi
-    
-    # PERF-03: Prune cache if too large
-    if [ -f "$cache_file" ] && [ "$(wc -l < "$cache_file" 2>/dev/null)" -gt "$_max_cache_lines" ]; then
-        tail -n "$_max_cache_lines" "$cache_file" > "$cache_file.tmp" 2>/dev/null && mv "$cache_file.tmp" "$cache_file" 2>/dev/null
-    fi
-}
-
-# Enable the cd hook for bash
-if [[ "$PROMPT_COMMAND" != *"phpswitch_auto_detect_project"* ]]; then
-    PROMPT_COMMAND="phpswitch_auto_detect_project;$PROMPT_COMMAND"
-fi
-
-# Run once when shell starts
-phpswitch_auto_detect_project
-EOL
-    
-    utils_show_status "success" "Added auto-switching hooks to $rc_file"
-}
-
-# Function to install auto-switching for fish
-function auto_install_fish {
-    local config_dir="$HOME/.config/fish"
-    local rc_file="$config_dir/config.fish"
-    
-    # Ensure the directory exists
-    mkdir -p "$config_dir" 2>/dev/null
-    
-    # Check if hooks are already installed
-    if grep -q "phpswitch_auto_detect_project" "$rc_file" 2>/dev/null; then
-        utils_show_status "info" "Auto-switching hooks already installed in $rc_file"
-        return 0
-    fi
-    
-    # Create backup before modifying
-    if [ -f "$rc_file" ]; then
-        local backup_file
-        backup_file="${rc_file}.bak.$(date +%Y%m%d%H%M%S)"
-        
-        # Validate backup file path
-        if utils_validate_path "$backup_file"; then
-            if cp "$rc_file" "$backup_file" 2>/dev/null; then
-                # Set secure permissions (readable/writable by owner only)
-                chmod 600 "$backup_file" 2>/dev/null
-                utils_show_status "info" "Created secure backup at ${backup_file}"
-            fi
-        fi
-    fi
-    
-    # Add the hook function to the rc file
-    # CQ-01: Simplified hook — delegates all logic to phpswitch --auto-mode
-    cat >> "$rc_file" << 'EOL'
-
-# PHPSwitch auto-switching
-function phpswitch_auto_detect_project --on-variable PWD
-    set cache_file "$HOME/.cache/phpswitch/directory_cache.txt"
-    set current_dir (pwd)
-    set _max_cache_lines 500
-    
-    mkdir -p (dirname "$cache_file") 2>/dev/null
-    
-    # Check cache
-    if test -f "$cache_file"; and test -r "$cache_file"
-        while read -l line
-            set dir_info (string split ":" -- $line)
-            set dir $dir_info[1]
-            set version $dir_info[2]
-            if test "$dir" = "$current_dir"
-                if test -n "$version"; and string match -rq '^[a-zA-Z0-9.@_-]+$' -- "$version"
-                    phpswitch --auto-mode > /dev/null 2>&1
-                end
-                return
-            end
-        end < "$cache_file"
-    end
-    
-    # Not in cache — detect and cache
-    set _detected ""
-    for file in ".php-version" ".phpversion"
-        if test -f "$current_dir/$file"
-            set _detected (cat "$current_dir/$file" | string trim)
-            break
-        end
-    end
-    if test -z "$_detected"; and begin; test -f "$current_dir/composer.json"; or test -f "$current_dir/.tool-versions"; end
-        set _detected (phpswitch --get-project-version 2>/dev/null)
-    end
-    
-    if test -n "$_detected"; and string match -rq '^[a-zA-Z0-9.@_-]+$' -- "$_detected"
-        echo "$current_dir:$_detected" >> "$cache_file" 2>/dev/null
-        phpswitch --auto-mode > /dev/null 2>&1
-    else
-        echo "$current_dir:" >> "$cache_file" 2>/dev/null
-    end
-    
-    # Prune cache if too large
-    if test -f "$cache_file"; and test (wc -l < "$cache_file" 2>/dev/null | string trim) -gt "$_max_cache_lines"
-        tail -n "$_max_cache_lines" "$cache_file" > "$cache_file.tmp" 2>/dev/null; and mv "$cache_file.tmp" "$cache_file" 2>/dev/null
-    end
-end
-
-# Run once when shell starts
-phpswitch_auto_detect_project
-EOL
-    
-    utils_show_status "success" "Added auto-switching hooks to $rc_file"
 }
 
 # Function to clear auto-switching directory cache
