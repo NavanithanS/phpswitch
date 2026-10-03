@@ -1,0 +1,20 @@
+#!/bin/bash
+# Fake brew for tests. Mimics `brew search` output, including the
+# "==> Formulae" header and installed-marker suffixes that real brew prints.
+case "$1" in
+    search)
+        case "$2" in
+            "/php@[0-9]/")
+                printf '==> Formulae\n'
+                printf 'php@8.1\nphp@8.2 ✔\nphp@8.3\nshivammathur/php/php@7.4\n'
+                ;;
+            "/^php$/")
+                printf 'php\n'
+                ;;
+        esac
+        ;;
+    --prefix)
+        printf '%s\n' "${HOMEBREW_PREFIX:-/opt/homebrew}"
+        ;;
+esac
+exit 0

@@ -290,7 +290,7 @@ function core_get_available_php_versions {
             search_file2=$(utils_create_secure_temp_file)
             
             # Run searches in background, track both PIDs
-            brew search /php@[0-9]/ 2>/dev/null | grep '^php@' > "$search_file1" &
+            brew search /php@[0-9]/ 2>/dev/null | grep -Eo 'php@[0-9]+\.[0-9]+' | sort -u > "$search_file1" &
             local brew_pid1=$!
             brew search /^php$/ 2>/dev/null | sed 's/^php$/php@default/' > "$search_file2" &
             local brew_pid2=$!
