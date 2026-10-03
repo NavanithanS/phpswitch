@@ -27,6 +27,7 @@ temp/
 phpswitch-combined.sh
 phpswitch/phpswitch-combined.sh
 phpswitch/.phpswitch-combined.tmp.sh
+phpswitch/php-switcher.sh
 
 # Editor / tool directories
 .obsidian/

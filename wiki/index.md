@@ -43,7 +43,9 @@ Content catalog. Updated on every ingest. The LLM reads this first when answerin
 
 ## Decisions
 
-*(None yet — add ADR-style pages here as design decisions are documented)*
+| Page | Summary |
+|------|---------|
+| [[decisions/roadmap-2026]] | Phased improvement plan (hygiene → CI → release hardening → v2 per-shell switching → features) |
 
 ## Sources
 

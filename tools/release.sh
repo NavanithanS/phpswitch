@@ -7,7 +7,8 @@ set -e
 # Configuration
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
-PHPSWITCH_SOURCE="$PROJECT_ROOT/phpswitch/phpswitch.sh"
+# Single source of truth for the version
+DEFAULTS_FILE="$PROJECT_ROOT/phpswitch/config/defaults.sh"
 BUILD_SCRIPT="$PROJECT_ROOT/phpswitch/build.sh"
 FORMULA_FILE="$PROJECT_ROOT/Formula/phpswitch.rb"
 # Default to current directory for tap, but allow override
@@ -26,7 +27,7 @@ fi
 
 # Function to get current version
 get_current_version() {
-    grep "^# Version:" "$PHPSWITCH_SOURCE" | cut -d":" -f2 | tr -d " "
+    grep '^PHPSWITCH_VERSION=' "$DEFAULTS_FILE" | sed 's/PHPSWITCH_VERSION="\(.*\)"/\1/'
 }
 
 # Function to update version in files
@@ -35,15 +36,6 @@ update_version() {
     
     echo "📝 Updating version to $new_version..."
     
-    # 1. Update source entry point
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        sed -i '' "s/^# Version: .*/# Version: $new_version/" "$PHPSWITCH_SOURCE"
-    else
-        sed -i "s/^# Version: .*/# Version: $new_version/" "$PHPSWITCH_SOURCE"
-    fi
-    
-    # 2. Update the single source of truth (defaults.sh)
-    local DEFAULTS_FILE="$PROJECT_ROOT/phpswitch/config/defaults.sh"
     if [ -f "$DEFAULTS_FILE" ]; then
         if [[ "$OSTYPE" == "darwin"* ]]; then
             sed -i '' "s/^PHPSWITCH_VERSION=\".*\"/PHPSWITCH_VERSION=\"$new_version\"/" "$DEFAULTS_FILE"
