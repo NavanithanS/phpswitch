@@ -889,6 +889,41 @@ function utils_ensure_cache_writable {
     return 1
 }
 
+# Resolve a path through any chain of symlinks (capped so a cycle can't hang)
+function utils_resolve_symlinks {
+    local path="$1"
+    local target hops=0
+    while [ -L "$path" ] && [ "$hops" -lt 40 ]; do
+        hops=$((hops + 1))
+        target=$(readlink "$path")
+        case "$target" in
+            /*) path="$target" ;;
+            # Relative targets (e.g. Homebrew's ../Cellar/...) are normalized via cd
+            *) path="$(cd "$(dirname "$path")/$(dirname "$target")" 2>/dev/null && pwd)/$(basename "$target")" ;;
+        esac
+    done
+    printf '%s\n' "$path"
+}
+
+# Atomically replace the contents of a file with those of $2.
+# Follows symlinks (dotfile managers stay intact) and keeps the file mode;
+# a failed write never leaves a truncated file behind.
+function utils_replace_file_contents {
+    local target="$1" source="$2"
+    local real
+    real=$(utils_resolve_symlinks "$target")
+    local tmp
+    tmp=$(mktemp "$(dirname "$real")/.phpswitch.XXXXXX") || return 1
+    if ! cat "$source" > "$tmp"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    if [ -e "$real" ]; then
+        chmod "$(stat -f '%Lp' "$real")" "$tmp" 2>/dev/null
+    fi
+    mv "$tmp" "$real" || { rm -f "$tmp"; return 1; }
+}
+
 # Run a command for an explicit user request (install/uninstall/update),
 # escalating with sudo only when the target directory isn't writable.
 function utils_run_for_dir {
@@ -1003,7 +1038,16 @@ function utils_read_tool_versions {
 
 # Function to detect shell type with enhanced detection
 function shell_detect_shell {
-    # First, check if we're in a specific shell based on environment variables
+    # The user's login shell comes first: phpswitch itself runs under bash,
+    # so $BASH_VERSION below is always set and says nothing about the user
+    case "$(basename "${SHELL:-}")" in
+        zsh|bash|fish)
+            basename "$SHELL"
+            return 0
+            ;;
+    esac
+
+    # Fall back to the shell we are running in
     if [ -n "$ZSH_VERSION" ]; then
         echo "zsh"
     elif [ -n "$BASH_VERSION" ]; then
@@ -1238,8 +1282,13 @@ EOL
         cat "$rc_file" >> "$temp_file"
     fi
     
-    # Move the temp file back to the original
-    mv "$temp_file" "$rc_file"
+    # Atomic, symlink- and mode-preserving replace
+    if ! utils_replace_file_contents "$rc_file" "$temp_file"; then
+        rm -f "$temp_file"
+        utils_show_status "error" "Could not update $rc_file; it was left unchanged"
+        return 1
+    fi
+    rm -f "$temp_file"
     
     utils_show_status "success" "Updated PATH in $rc_file for $new_version"
     
@@ -2630,8 +2679,8 @@ function auto_init_line {
     fi
 }
 
-# The user's login shell. shell_detect_shell can't be used here: phpswitch
-# itself runs under bash, so it would always answer "bash".
+# The user's login shell, or failure when it isn't zsh/bash/fish (unlike
+# shell_detect_shell, which falls back to guessing)
 function auto_login_shell {
     local shell_name
     shell_name=$(basename "${SHELL:-}")
@@ -2696,15 +2745,22 @@ function auto_install {
     done
 
     # 2. Remove legacy blocks (they relink PHP globally on every cd).
-    # Write through (cat >) so symlinked rc files and their permissions survive.
-    local content
+    # Atomic replace that keeps symlinked rc files and their permissions.
+    local content stripped_file
     for f in "${legacy_files[@]}"; do
         content=$(auto_strip_legacy_hooks "$f") || continue
         auto_backup_rc "$f" || {
             utils_show_status "error" "Could not back up $f; leaving it unchanged"
             return 1
         }
-        printf '%s\n' "$content" > "$f"
+        stripped_file=$(utils_create_secure_temp_file)
+        printf '%s\n' "$content" > "$stripped_file"
+        if ! utils_replace_file_contents "$f" "$stripped_file"; then
+            rm -f "$stripped_file"
+            utils_show_status "error" "Could not update $f; it was left unchanged"
+            return 1
+        fi
+        rm -f "$stripped_file"
         utils_show_status "success" "Removed the legacy auto-switching hook from $f"
     done
     if [ ${#legacy_files[@]} -gt 0 ]; then
@@ -3969,19 +4025,7 @@ function cmd_uninstall_command {
 
 # Function to resolve a path through any chain of symlinks
 function cmd_resolve_script_path {
-    local path="$1"
-    local target hops=0
-    # Cap hops so a symlink cycle cannot hang the update
-    while [ -L "$path" ] && [ "$hops" -lt 40 ]; do
-        hops=$((hops + 1))
-        target=$(readlink "$path")
-        case "$target" in
-            /*) path="$target" ;;
-            # Relative targets (Homebrew uses ../Cellar/...) are normalized via cd
-            *) path="$(cd "$(dirname "$path")/$(dirname "$target")" 2>/dev/null && pwd)/$(basename "$target")" ;;
-        esac
-    done
-    printf '%s\n' "$path"
+    utils_resolve_symlinks "$1"
 }
 
 # Function to update self from the latest GitHub release.
@@ -4622,33 +4666,16 @@ function cmd_configure_phpswitch {
             if [ "$(utils_validate_yes_no "" "$AUTO_SWITCH_PHP_VERSION")" = "y" ]; then
                 AUTO_SWITCH_PHP_VERSION=true
                 
-                # Ask to set up hooks if not already done
-                local shell_type
-                shell_type=$(shell_detect_shell)
-                local hook_file
+                # Ask to set up per-shell switching if not already done
                 local hook_exists=false
-                
-                case "$shell_type" in
-                    "bash")
-                        hook_file="$HOME/.bashrc"
-                        if [ -f "$hook_file" ] && grep -q "phpswitch_auto_detect_project" "$hook_file"; then
-                            hook_exists=true
-                        fi
-                        ;;
-                    "zsh")
-                        hook_file="$HOME/.zshrc"
-                        if [ -f "$hook_file" ] && grep -q "phpswitch_auto_detect_project" "$hook_file"; then
-                            hook_exists=true
-                        fi
-                        ;;
-                    "fish")
-                        hook_file="$HOME/.config/fish/config.fish"
-                        if [ -f "$hook_file" ] && grep -q "phpswitch_auto_detect_project" "$hook_file"; then
-                            hook_exists=true
-                        fi
-                        ;;
-                esac
-                
+                local login_shell hook_file
+                if login_shell=$(auto_login_shell); then
+                    hook_file=$(auto_rc_file "$login_shell")
+                    if [ -f "$hook_file" ] && grep -qF "$AUTO_INIT_MARKER" "$hook_file"; then
+                        hook_exists=true
+                    fi
+                fi
+
                 if [ "$hook_exists" = "false" ]; then
                     printf "  Install shell hooks for auto-switching? (y/n) "
                     if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then

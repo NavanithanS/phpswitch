@@ -99,8 +99,8 @@ function auto_init_line {
     fi
 }
 
-# The user's login shell. shell_detect_shell can't be used here: phpswitch
-# itself runs under bash, so it would always answer "bash".
+# The user's login shell, or failure when it isn't zsh/bash/fish (unlike
+# shell_detect_shell, which falls back to guessing)
 function auto_login_shell {
     local shell_name
     shell_name=$(basename "${SHELL:-}")
@@ -165,15 +165,22 @@ function auto_install {
     done
 
     # 2. Remove legacy blocks (they relink PHP globally on every cd).
-    # Write through (cat >) so symlinked rc files and their permissions survive.
-    local content
+    # Atomic replace that keeps symlinked rc files and their permissions.
+    local content stripped_file
     for f in "${legacy_files[@]}"; do
         content=$(auto_strip_legacy_hooks "$f") || continue
         auto_backup_rc "$f" || {
             utils_show_status "error" "Could not back up $f; leaving it unchanged"
             return 1
         }
-        printf '%s\n' "$content" > "$f"
+        stripped_file=$(utils_create_secure_temp_file)
+        printf '%s\n' "$content" > "$stripped_file"
+        if ! utils_replace_file_contents "$f" "$stripped_file"; then
+            rm -f "$stripped_file"
+            utils_show_status "error" "Could not update $f; it was left unchanged"
+            return 1
+        fi
+        rm -f "$stripped_file"
         utils_show_status "success" "Removed the legacy auto-switching hook from $f"
     done
     if [ ${#legacy_files[@]} -gt 0 ]; then

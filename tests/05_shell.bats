@@ -80,6 +80,35 @@ update_rc() {
     [ "$status" -ne 0 ]
 }
 
+@test "detection prefers the login shell over the shell phpswitch runs in" {
+    SHELL=/bin/zsh run shell_detect_shell
+    [ "$output" = "zsh" ]
+    SHELL=/opt/homebrew/bin/fish run shell_detect_shell
+    [ "$output" = "fish" ]
+}
+
+@test "updating a symlinked rc file keeps the symlink" {
+    use_shell zsh
+    mkdir -p "$HOME/dotfiles"
+    printf 'alias ll="ls -la"\n' > "$HOME/dotfiles/zshrc"
+    ln -s "$HOME/dotfiles/zshrc" "$HOME/.zshrc"
+    update_rc php@8.2
+    [ -L "$HOME/.zshrc" ]
+    grep -qF "opt/php@8.2/bin" "$HOME/dotfiles/zshrc"
+    grep -qF 'alias ll="ls -la"' "$HOME/dotfiles/zshrc"
+}
+
+@test "global switch writes the PATH block to the login shell's rc file" {
+    SHELL=/bin/zsh
+    export SHELL
+    unset -f shell_detect_shell
+    source "$REPO_ROOT/phpswitch/lib/shell.sh"
+    touch "$HOME/.zshrc"
+    update_rc php@8.2
+    grep -qF "opt/php@8.2/bin" "$HOME/.zshrc"
+    [ ! -f "$HOME/.bashrc" ]
+}
+
 @test "a backup is created before modifying the rc file" {
     use_shell zsh
     printf 'original\n' > "$HOME/.zshrc"

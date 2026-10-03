@@ -4,7 +4,16 @@
 
 # Function to detect shell type with enhanced detection
 function shell_detect_shell {
-    # First, check if we're in a specific shell based on environment variables
+    # The user's login shell comes first: phpswitch itself runs under bash,
+    # so $BASH_VERSION below is always set and says nothing about the user
+    case "$(basename "${SHELL:-}")" in
+        zsh|bash|fish)
+            basename "$SHELL"
+            return 0
+            ;;
+    esac
+
+    # Fall back to the shell we are running in
     if [ -n "$ZSH_VERSION" ]; then
         echo "zsh"
     elif [ -n "$BASH_VERSION" ]; then
@@ -239,8 +248,13 @@ EOL
         cat "$rc_file" >> "$temp_file"
     fi
     
-    # Move the temp file back to the original
-    mv "$temp_file" "$rc_file"
+    # Atomic, symlink- and mode-preserving replace
+    if ! utils_replace_file_contents "$rc_file" "$temp_file"; then
+        rm -f "$temp_file"
+        utils_show_status "error" "Could not update $rc_file; it was left unchanged"
+        return 1
+    fi
+    rm -f "$temp_file"
     
     utils_show_status "success" "Updated PATH in $rc_file for $new_version"
     

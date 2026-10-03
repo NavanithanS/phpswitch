@@ -639,19 +639,7 @@ function cmd_uninstall_command {
 
 # Function to resolve a path through any chain of symlinks
 function cmd_resolve_script_path {
-    local path="$1"
-    local target hops=0
-    # Cap hops so a symlink cycle cannot hang the update
-    while [ -L "$path" ] && [ "$hops" -lt 40 ]; do
-        hops=$((hops + 1))
-        target=$(readlink "$path")
-        case "$target" in
-            /*) path="$target" ;;
-            # Relative targets (Homebrew uses ../Cellar/...) are normalized via cd
-            *) path="$(cd "$(dirname "$path")/$(dirname "$target")" 2>/dev/null && pwd)/$(basename "$target")" ;;
-        esac
-    done
-    printf '%s\n' "$path"
+    utils_resolve_symlinks "$1"
 }
 
 # Function to update self from the latest GitHub release.
@@ -1292,33 +1280,16 @@ function cmd_configure_phpswitch {
             if [ "$(utils_validate_yes_no "" "$AUTO_SWITCH_PHP_VERSION")" = "y" ]; then
                 AUTO_SWITCH_PHP_VERSION=true
                 
-                # Ask to set up hooks if not already done
-                local shell_type
-                shell_type=$(shell_detect_shell)
-                local hook_file
+                # Ask to set up per-shell switching if not already done
                 local hook_exists=false
-                
-                case "$shell_type" in
-                    "bash")
-                        hook_file="$HOME/.bashrc"
-                        if [ -f "$hook_file" ] && grep -q "phpswitch_auto_detect_project" "$hook_file"; then
-                            hook_exists=true
-                        fi
-                        ;;
-                    "zsh")
-                        hook_file="$HOME/.zshrc"
-                        if [ -f "$hook_file" ] && grep -q "phpswitch_auto_detect_project" "$hook_file"; then
-                            hook_exists=true
-                        fi
-                        ;;
-                    "fish")
-                        hook_file="$HOME/.config/fish/config.fish"
-                        if [ -f "$hook_file" ] && grep -q "phpswitch_auto_detect_project" "$hook_file"; then
-                            hook_exists=true
-                        fi
-                        ;;
-                esac
-                
+                local login_shell hook_file
+                if login_shell=$(auto_login_shell); then
+                    hook_file=$(auto_rc_file "$login_shell")
+                    if [ -f "$hook_file" ] && grep -qF "$AUTO_INIT_MARKER" "$hook_file"; then
+                        hook_exists=true
+                    fi
+                fi
+
                 if [ "$hook_exists" = "false" ]; then
                     printf "  Install shell hooks for auto-switching? (y/n) "
                     if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then

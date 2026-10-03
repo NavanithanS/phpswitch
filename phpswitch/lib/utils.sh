@@ -423,6 +423,41 @@ function utils_ensure_cache_writable {
     return 1
 }
 
+# Resolve a path through any chain of symlinks (capped so a cycle can't hang)
+function utils_resolve_symlinks {
+    local path="$1"
+    local target hops=0
+    while [ -L "$path" ] && [ "$hops" -lt 40 ]; do
+        hops=$((hops + 1))
+        target=$(readlink "$path")
+        case "$target" in
+            /*) path="$target" ;;
+            # Relative targets (e.g. Homebrew's ../Cellar/...) are normalized via cd
+            *) path="$(cd "$(dirname "$path")/$(dirname "$target")" 2>/dev/null && pwd)/$(basename "$target")" ;;
+        esac
+    done
+    printf '%s\n' "$path"
+}
+
+# Atomically replace the contents of a file with those of $2.
+# Follows symlinks (dotfile managers stay intact) and keeps the file mode;
+# a failed write never leaves a truncated file behind.
+function utils_replace_file_contents {
+    local target="$1" source="$2"
+    local real
+    real=$(utils_resolve_symlinks "$target")
+    local tmp
+    tmp=$(mktemp "$(dirname "$real")/.phpswitch.XXXXXX") || return 1
+    if ! cat "$source" > "$tmp"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    if [ -e "$real" ]; then
+        chmod "$(stat -f '%Lp' "$real")" "$tmp" 2>/dev/null
+    fi
+    mv "$tmp" "$real" || { rm -f "$tmp"; return 1; }
+}
+
 # Run a command for an explicit user request (install/uninstall/update),
 # escalating with sudo only when the target directory isn't writable.
 function utils_run_for_dir {
