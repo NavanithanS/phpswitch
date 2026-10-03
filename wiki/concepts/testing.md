@@ -40,6 +40,7 @@ Unit tests call module functions directly. CLI tests (`07_cli.bats`) run the bui
 | `11_doctor.bats` | `doctor` checks and its read-only guarantee |
 | `12_noninteractive.bats` | EOF-safe prompts, no menu without a TTY, unknown arguments, sudo used only with consent or for unwritable dirs |
 | `13_completions.bats` | Completion words match `--help`; bash completion driven functionally; zsh registration; fish syntax (CI) |
+| `14_composer_constraints.bats` | Composer constraint matrix, lowest-satisfying resolution, historical-choice preservation, platform pin |
 | `08_update.bats` | `--update`: Homebrew deferral, no downgrade, checksum missing or mismatched, version mismatch, exit status |
 
 ## Gotchas

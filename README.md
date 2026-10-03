@@ -172,6 +172,8 @@ PHPSwitch checks the following files (in order) when the menu opens or `--projec
 | `composer.json`  | `require.php`, e.g. `>=8.1`      |
 | `.tool-versions` | `php 8.2.x`                      |
 
+For `composer.json`, `config.platform.php` is used as an exact pin. Otherwise the `require.php` constraint (`^8.1`, `>=8.2 <8.4`, `^7.4 || ^8.0`, …) resolves to an installed version that satisfies it: the constraint's own first version if that's installed, else the lowest installed match.
+
 ```bash
 echo "8.1" > .php-version
 phpswitch -p        # switch to the project version

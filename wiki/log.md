@@ -52,3 +52,7 @@ Prompts are EOF-safe, the menu needs a TTY, and unknown arguments exit 2. Automa
 ## [2026-10-03] ingest | Phase 4c shell completions
 
 Added `lib/completions.sh` (`phpswitch completions bash|zsh|fish`), with a drift test against `--help`. The formula line is deferred to the next release ([[concepts/release-and-update]]). Updated the module order in CLAUDE.md and [[architecture/module-pipeline]].
+
+## [2026-10-03] ingest | Phase 4d composer constraints
+
+`require.php` constraints are now resolved against installed series (historical answer first, then lowest satisfying, then fallback). Documented in [[concepts/auto-switch]]; roadmap updated.
