@@ -24,7 +24,7 @@ eval "$(phpswitch init zsh)"     # bash: init bash; fish: phpswitch init fish | 
 | Piece | Role |
 |-------|------|
 | `PHPSWITCH_BIN`, `PHPSWITCH_PREFIX` | Absolute binary path and Homebrew prefix, baked in at init (single-quoted; init refuses paths containing `'`, `\` or newlines) |
-| `phpswitch()` wrapper | `use <v>` / `use auto`; `local` and `global` re-run the hook afterwards; everything else is passed to the binary |
+| `phpswitch()` wrapper | `use <v>` / `use auto` (each prints what the shell now uses); `local` and `global` re-run the hook afterwards; everything else is passed to the binary |
 | `_phpswitch_hook` | zsh `chpwd`, bash `PROMPT_COMMAND` (returns early if `$PWD` hasn't changed), fish `--on-variable PWD` |
 | `_phpswitch_detect` | Walks up from `$PWD` while inside `$HOME`. At each level: `.php-version`/`.phpversion`, then `composer.json`/`.tool-versions`. **Fast path:** an exact `X.Y` or `php@X.Y` whose `opt/php@X.Y/bin/php` exists is resolved in pure shell. Anything else is delegated to `phpswitch __php-dir`. |
 | `_phpswitch_apply` | Removes its previous `bin`/`sbin` entries (exact match only), prepends the new ones, and tracks them in `PHPSWITCH_PHP_DIR` |

@@ -40,3 +40,4 @@ Before any modification, `lib/shell.sh` creates a backup of the rc file. This is
 
 - The rc file is chosen from the **login shell** (`$SHELL`), because `shell_detect_shell` checks it first. Before, it always returned `bash`, since phpswitch runs under bash, so zsh users' blocks went into `.bashrc`.
 - The managed block is written with `utils_replace_file_contents`: a temp file next to the resolved target, given the same mode, then `mv`. The write is atomic and symlinked dotfiles survive.
+- **No-op on the same version:** if the managed block's own header (`# Path configuration for PHP version: X`, read only between the markers) already names the target version, `shell_update_rc` changes nothing and makes no backup. `version_switch_php` also skips the PHP-FPM restart unless the link changed or the version was reinstalled.

@@ -68,3 +68,7 @@ Updated [[overview]], [[entities/lib-auto-switch]] and [[concepts/auto-switch]] 
 ## [2026-10-03] lint | Branch-wide review fixes
 
 Fixed: re-sourcing the rc file inside a project lost the per-shell version; `init` failed when `brew` wasn't on PATH (now falls back to the standard Homebrew locations). Hardening: `_phpswitch_valid_dir` rejects `/..`, and `auto_install` backs up the target rc file before rewriting legacy files. Documented in [[concepts/shell-integration]].
+
+## [2026-10-03] lint | Fixes from local install testing
+
+From hands-on testing: an unchanged `global`/`--switch` no longer restarts PHP-FPM or rewrites the rc file (a reinstall still restarts FPM); `use` / `use auto` confirm what the shell uses; the dependency check prints only problems; `doctor` flags unmanaged PHP `PATH` lines in rc files. Updated [[concepts/doctor]], [[concepts/shell-patching]] and [[concepts/shell-integration]].

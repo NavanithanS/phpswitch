@@ -24,6 +24,7 @@ sources: 0
 | 5 | Per-shell integration in the login shell's rc file, and whether it's loaded (`PHPSWITCH_BIN` set) | warn |
 | 6 | `phpswitch use` pin active | warn |
 | 7 | Legacy auto-switch hook in any rc file (`auto_legacy_rc_candidates`) | warn |
+| 7b | PHP `PATH` assignments (`export PATH=`, `PATH=`, fish `set … PATH`, `fish_add_path`) mentioning `/opt/php` **outside** phpswitch's managed block, in `.zshrc`, `.zprofile`, `.bashrc`, `.bash_profile`, `.profile` and `config.fish`. These are not removed automatically, because no known phpswitch version wrote them in that form. | warn |
 | 8 | Project version: not installed (fail), or the shell is using a different one (warn) | fail / warn |
 | 9 | Root PHP-FPM LaunchDaemons (`$PHPSWITCH_LAUNCH_DAEMONS_DIR`, default `/Library/LaunchDaemons`) | warn |
 | 10 | Root-owned files in `Cellar/php*` (depth ≤ 3) | warn |
