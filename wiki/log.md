@@ -20,3 +20,7 @@ Brainstormed improvements, verified findings against code (global brew-link swit
 ## [2026-10-03] lint | Phase 0 hygiene complete; v2 per-shell default decided
 
 Untracked build outputs, removed stale prepare-release script, made `config/defaults.sh` the single version source for `tools/release.sh`, added `tests/03_versions.bats` with a fake `brew` (regression for brew-search parsing). Recorded per-shell-by-default decision for v2 in [[decisions/roadmap-2026]].
+
+## [2026-10-03] ingest | Phase 1 test harness and CI
+
+Added [[concepts/testing]] (fake brew, isolated HOME, suites 03–07, CI pipeline). Marked Phase 1 done in [[decisions/roadmap-2026]] and recorded pre-existing issues found during testing. AGENTS.md gained testing conventions.

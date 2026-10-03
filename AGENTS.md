@@ -15,3 +15,10 @@ This repository includes a structured wiki in the `wiki/` directory that serves 
 ## 3. Strict Rules
 - Never use `ls | grep` or unsafe shell idioms. Run `shellcheck` before declaring any work done.
 - Keep the `master` branch clean. If you add features, ensure tests are added to `tests/`.
+
+## 4. Testing Conventions
+- Tests must never touch the real machine. Start every `.bats` file with `load helpers/common` and call `common_setup` / `common_teardown`. These give each test a temporary `$HOME`, a fake Homebrew prefix (`$FAKE_BREW_PREFIX`), and the fake `brew` from `tests/helpers/bin/brew`, which logs every call to `$FAKE_BREW_LOG`.
+- Use `load_modules` to source the lib modules for unit tests, and `fake_php_install` / `fake_php_link` to set up PHP versions.
+- Never write `! cmd` as an assertion in bats, because it never fails a test. Use `run cmd` followed by `[ "$status" -ne 0 ]`.
+- Rebuild `php-switcher.sh` (`cd phpswitch && ./build.sh`) before committing. CI fails if the committed artifact doesn't match a fresh build.
+- CI (`.github/workflows/ci.yml`) runs shellcheck, the build-sync check and `bats tests/` on macOS. See `wiki/concepts/testing.md`.

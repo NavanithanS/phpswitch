@@ -41,7 +41,7 @@ The `sleep 1` loop in `core.sh:280-284` is a timeout guard for `brew search`, so
 
 **Acceptance:** `git status` is clean after `./build.sh`, and `--version` and `release.sh` read the same value.
 
-## Phase 1: Test harness and CI
+## Phase 1: Test harness and CI ✅ (done 2026-10-03, see [[concepts/testing]])
 
 **Goal:** refactor the riskier phases with a safety net in place.
 
@@ -53,7 +53,7 @@ The `sleep 1` loop in `core.sh:280-284` is a timeout guard for `brew search`, so
   - `05_shell.bats`: rc patching for zsh, bash and fish, including idempotency and backups.
   - `06_cli.bats`: flag dispatch, exit codes, `--help` and `--version`.
 - **GitHub Actions** (`.github/workflows/ci.yml`, `macos-latest`):
-  - `find phpswitch tools -name '*.sh' -exec shellcheck {} +` (a `**` glob needs `globstar`)
+  - shellcheck on an explicit file list: the built artifact (whole-program view), `lib/*.sh`, `build.sh`, `phpswitch.sh`, `tools/release.sh` and the fake brew. `tools/fix-permissions.sh` is excluded because of a pre-existing syntax error (see below).
   - `bats tests/`
   - Build sync check: run `./build.sh`, then `git diff --exit-code php-switcher.sh`. The build currently has no timestamps, so it is deterministic. Keep it that way.
 
@@ -121,6 +121,15 @@ Rough priority order. Confidence in brackets.
 - **Reduce sudo (F8):** print the exact fix command instead of escalating. Keep `sudo` only for `/usr/local/bin` installs, and only when the user asks for it explicitly.
 - **Non-interactive mode:** `--yes` / `--no` flags, and auto-detect when there's no TTY (`[ -t 0 ]`), so prompts never hang in CI or scripts.
 - **Split `commands.sh` (F9):** `cmd/dispatch.sh`, `cmd/menu.sh`, `cmd/install.sh`, `cmd/update.sh`. Update the module order in `build.sh` and in [[architecture/module-pipeline]].
+
+## Pre-existing issues found along the way (not yet fixed)
+
+| Found in | Issue | Location |
+|----------|-------|----------|
+| Phase 1 | Bash syntax error: a nested heredoc closes the outer one. The script is unused, since `--fix-permissions` lives in `commands.sh`. Delete it or repair it. | `tools/fix-permissions.sh:170` |
+| Phase 1 | With FPM restart on, each auto-switch *starts* the target FPM service even if FPM wasn't running before. | `lib/auto-switch.sh:403-407` |
+| Phase 1 | The upward search stops at `$HOME` using a prefix match, so `/Users/bobby` counts as inside `/Users/bob`. | `lib/version.sh:53` |
+| Phase 1 | `--auto-mode` uses the fixed lock path `/tmp/phpswitch_<uid>.lock`, so tests share it with the real hook. | `phpswitch.sh`, build main block |
 
 ## Suggested sequencing
 

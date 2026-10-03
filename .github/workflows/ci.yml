@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: brew install bats-core shellcheck
+
+      - name: Shellcheck
+        # Modules are linted individually and as the built artifact (whole-program view).
+        # config/defaults.sh is covered via the artifact; tools/fix-permissions.sh is legacy and excluded.
+        run: |
+          shellcheck -S warning \
+            php-switcher.sh \
+            phpswitch/lib/*.sh \
+            phpswitch/build.sh \
+            phpswitch/phpswitch.sh \
+            tools/release.sh \
+            tests/helpers/bin/brew
+
+      - name: Built artifact is up to date
+        run: |
+          cd phpswitch && ./build.sh > /dev/null
+          cd .. && git diff --exit-code -- php-switcher.sh || {
+            echo "::error::php-switcher.sh is stale. Run phpswitch/build.sh and commit the result."
+            exit 1
+          }
+
+      - name: Tests
+        run: bats tests/
