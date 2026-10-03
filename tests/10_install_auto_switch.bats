@@ -63,6 +63,19 @@ sum() {
     [ "$(sum "$HOME/.bashrc")" = "$bash_before" ]
 }
 
+@test "a failed target backup changes no file" {
+    use_shell zsh
+    printf 'export EDITOR=vim\n' > "$HOME/.zshrc"
+    cp "$FIXTURES/legacy-32bad01-bash.rc" "$HOME/.bashrc"
+    local zsh_before bash_before
+    zsh_before=$(sum "$HOME/.zshrc"); bash_before=$(sum "$HOME/.bashrc")
+    auto_backup_rc() { [ "$1" = "$HOME/.zshrc" ] && return 1; command cp "$1" "$1.bak.test"; }
+    run auto_install
+    [ "$status" -ne 0 ]
+    [ "$(sum "$HOME/.zshrc")" = "$zsh_before" ]
+    [ "$(sum "$HOME/.bashrc")" = "$bash_before" ]
+}
+
 @test "unsupported login shell changes nothing" {
     export SHELL=/bin/tcsh
     run auto_install

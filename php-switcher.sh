@@ -73,7 +73,19 @@ function core_load_config {
         core_debug_log "No configuration file found at $CONFIG_FILE"
     fi
     
-    # Determine Homebrew prefix (SEC-03: deferred from global scope)
+    # Determine Homebrew prefix (SEC-03: deferred from global scope).
+    # `phpswitch init` runs from rc files, possibly before `brew shellenv`
+    # has put brew on PATH, so fall back to the standard install locations.
+    if ! command -v brew >/dev/null 2>&1; then
+        local brew_candidate
+        for brew_candidate in ${PHPSWITCH_BREW_CANDIDATES:-/opt/homebrew/bin/brew /usr/local/bin/brew}; do
+            if [ -x "$brew_candidate" ]; then
+                PATH="$(dirname "$brew_candidate"):$PATH"
+                export PATH
+                break
+            fi
+        done
+    fi
     if command -v brew >/dev/null 2>&1; then
         HOMEBREW_PREFIX=$(brew --prefix)
     else
@@ -2859,6 +2871,23 @@ function auto_install {
         fi
     done
 
+    # Back up the target rc now, so a failed backup can't leave legacy hooks
+    # removed without the integration line added
+    local needs_init=true
+    if [ -f "$rc_file" ] && grep -qF "$AUTO_INIT_MARKER" "$rc_file"; then
+        needs_init=false
+    fi
+    local migrated=false
+    for f in "${legacy_files[@]}"; do
+        [ "$f" = "$rc_file" ] && migrated=true
+    done
+    if [ "$needs_init" = "true" ] && [ "$migrated" = "false" ]; then
+        auto_backup_rc "$rc_file" || {
+            utils_show_status "error" "Could not back up $rc_file; no files were changed"
+            return 1
+        }
+    fi
+
     # 2. Remove legacy blocks (they relink PHP globally on every cd).
     # Atomic replace that keeps symlinked rc files and their permissions.
     local content stripped_file
@@ -2884,20 +2913,9 @@ function auto_install {
 
     # 3. Add the integration line to the login shell's rc file
     mkdir -p "$(dirname "$rc_file")" 2>/dev/null
-    if [ -f "$rc_file" ] && grep -qF "$AUTO_INIT_MARKER" "$rc_file"; then
+    if [ "$needs_init" = "false" ]; then
         utils_show_status "info" "Per-shell switching is already set up in $rc_file"
     else
-        # Skip a second backup if this file was just migrated
-        local migrated=false
-        for f in "${legacy_files[@]}"; do
-            [ "$f" = "$rc_file" ] && migrated=true
-        done
-        if [ "$migrated" = "false" ]; then
-            auto_backup_rc "$rc_file" || {
-                utils_show_status "error" "Could not back up $rc_file; leaving it unchanged"
-                return 1
-            }
-        fi
         printf '\n%s\n%s\n' "$AUTO_INIT_MARKER" "$init_line" >> "$rc_file"
         utils_show_status "success" "Added per-shell switching to $rc_file"
     fi
@@ -3059,6 +3077,8 @@ function init_print {
                 cat << 'EOF'
 autoload -Uz add-zsh-hook
 add-zsh-hook chpwd _phpswitch_hook
+# Re-evaluate even if this shell already ran the hook here (re-sourced rc)
+_phpswitch_last_pwd=""
 _phpswitch_hook
 EOF
             else
@@ -3066,6 +3086,8 @@ EOF
 if [[ ";${PROMPT_COMMAND:-};" != *";_phpswitch_hook;"* ]]; then
     PROMPT_COMMAND="_phpswitch_hook${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 fi
+# Re-evaluate even if this shell already ran the hook here (re-sourced rc)
+_phpswitch_last_pwd=""
 _phpswitch_hook
 EOF
             fi
@@ -3104,7 +3126,7 @@ _phpswitch_valid_dir() {
         *) return 1 ;;
     esac
     case "$1" in
-        *:*|*$'\n'*) return 1 ;;
+        *:*|*$'\n'*|*/..*) return 1 ;;
     esac
     [ -x "$1/bin/php" ]
 }
@@ -3225,6 +3247,7 @@ function init_print_fish {
 function _phpswitch_valid_dir
     string match -q -- "$PHPSWITCH_PREFIX/opt/php*" "$argv[1]"; or return 1
     string match -q -- '*:*' "$argv[1]"; and return 1
+    string match -q -- '*/..*' "$argv[1]"; and return 1
     test -x "$argv[1]/bin/php"
 end
 
@@ -3325,6 +3348,8 @@ function phpswitch
     end
 end
 
+# Re-evaluate even if this shell already ran the hook here (re-sourced rc)
+set -g _phpswitch_last_pwd ""
 _phpswitch_hook
 EOF
 }

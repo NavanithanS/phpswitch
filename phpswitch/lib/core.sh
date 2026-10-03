@@ -52,7 +52,19 @@ function core_load_config {
         core_debug_log "No configuration file found at $CONFIG_FILE"
     fi
     
-    # Determine Homebrew prefix (SEC-03: deferred from global scope)
+    # Determine Homebrew prefix (SEC-03: deferred from global scope).
+    # `phpswitch init` runs from rc files, possibly before `brew shellenv`
+    # has put brew on PATH, so fall back to the standard install locations.
+    if ! command -v brew >/dev/null 2>&1; then
+        local brew_candidate
+        for brew_candidate in ${PHPSWITCH_BREW_CANDIDATES:-/opt/homebrew/bin/brew /usr/local/bin/brew}; do
+            if [ -x "$brew_candidate" ]; then
+                PATH="$(dirname "$brew_candidate"):$PATH"
+                export PATH
+                break
+            fi
+        done
+    fi
     if command -v brew >/dev/null 2>&1; then
         HOMEBREW_PREFIX=$(brew --prefix)
     else

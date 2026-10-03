@@ -278,3 +278,33 @@ hook_dir() {
     [ "$status" -eq 0 ]
     [ "$(cat .php-version)" = "8.2" ]
 }
+
+@test "re-sourcing the rc inside a project keeps the project's PHP" {
+    echo "8.2" > "$PROJECT/.php-version"
+    for sh in bash zsh; do
+        run_shell "$sh" '
+            cd "$HOME/project"; _phpswitch_hook; php -v
+            # what the global PATH block does when the rc is sourced again
+            PATH="$PHPSWITCH_PREFIX/opt/php@8.1/bin:$PATH"
+            eval "$("$PHPSWITCH_BIN" init '"$sh"')"; php -v'
+        [ "$status" -eq 0 ]
+        [ "${lines[0]}" = "PHP 8.2.0 (cli)" ]
+        [ "${lines[1]}" = "PHP 8.2.0 (cli)" ] || { echo "$sh: $output"; return 1; }
+    done
+}
+
+@test "init finds Homebrew when brew is not on PATH" {
+    run env -i HOME="$HOME" PATH=/usr/bin:/bin FAKE_BREW_PREFIX="$FAKE_BREW_PREFIX" \
+        PHPSWITCH_BREW_CANDIDATES="$TEST_ROOT/none/brew ${BATS_TEST_DIRNAME}/helpers/bin/brew" \
+        "$BIN" init zsh
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "# phpswitch shell integration (zsh)" ]
+    [[ "$output" == *"export PHPSWITCH_PREFIX='$FAKE_BREW_PREFIX'"* ]]
+}
+
+@test "valid_dir rejects paths that climb out of the prefix" {
+    run_shell bash '
+        mkdir -p "$PHPSWITCH_PREFIX/opt/php@8.1/../../escape/bin"
+        _phpswitch_valid_dir "$PHPSWITCH_PREFIX/opt/php@8.1/../../escape" && echo accepted || echo rejected'
+    [ "$output" = "rejected" ]
+}

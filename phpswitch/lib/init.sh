@@ -84,6 +84,8 @@ function init_print {
                 cat << 'EOF'
 autoload -Uz add-zsh-hook
 add-zsh-hook chpwd _phpswitch_hook
+# Re-evaluate even if this shell already ran the hook here (re-sourced rc)
+_phpswitch_last_pwd=""
 _phpswitch_hook
 EOF
             else
@@ -91,6 +93,8 @@ EOF
 if [[ ";${PROMPT_COMMAND:-};" != *";_phpswitch_hook;"* ]]; then
     PROMPT_COMMAND="_phpswitch_hook${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 fi
+# Re-evaluate even if this shell already ran the hook here (re-sourced rc)
+_phpswitch_last_pwd=""
 _phpswitch_hook
 EOF
             fi
@@ -129,7 +133,7 @@ _phpswitch_valid_dir() {
         *) return 1 ;;
     esac
     case "$1" in
-        *:*|*$'\n'*) return 1 ;;
+        *:*|*$'\n'*|*/..*) return 1 ;;
     esac
     [ -x "$1/bin/php" ]
 }
@@ -250,6 +254,7 @@ function init_print_fish {
 function _phpswitch_valid_dir
     string match -q -- "$PHPSWITCH_PREFIX/opt/php*" "$argv[1]"; or return 1
     string match -q -- '*:*' "$argv[1]"; and return 1
+    string match -q -- '*/..*' "$argv[1]"; and return 1
     test -x "$argv[1]/bin/php"
 end
 
@@ -350,6 +355,8 @@ function phpswitch
     end
 end
 
+# Re-evaluate even if this shell already ran the hook here (re-sourced rc)
+set -g _phpswitch_last_pwd ""
 _phpswitch_hook
 EOF
 }

@@ -164,6 +164,23 @@ function auto_install {
         fi
     done
 
+    # Back up the target rc now, so a failed backup can't leave legacy hooks
+    # removed without the integration line added
+    local needs_init=true
+    if [ -f "$rc_file" ] && grep -qF "$AUTO_INIT_MARKER" "$rc_file"; then
+        needs_init=false
+    fi
+    local migrated=false
+    for f in "${legacy_files[@]}"; do
+        [ "$f" = "$rc_file" ] && migrated=true
+    done
+    if [ "$needs_init" = "true" ] && [ "$migrated" = "false" ]; then
+        auto_backup_rc "$rc_file" || {
+            utils_show_status "error" "Could not back up $rc_file; no files were changed"
+            return 1
+        }
+    fi
+
     # 2. Remove legacy blocks (they relink PHP globally on every cd).
     # Atomic replace that keeps symlinked rc files and their permissions.
     local content stripped_file
@@ -189,20 +206,9 @@ function auto_install {
 
     # 3. Add the integration line to the login shell's rc file
     mkdir -p "$(dirname "$rc_file")" 2>/dev/null
-    if [ -f "$rc_file" ] && grep -qF "$AUTO_INIT_MARKER" "$rc_file"; then
+    if [ "$needs_init" = "false" ]; then
         utils_show_status "info" "Per-shell switching is already set up in $rc_file"
     else
-        # Skip a second backup if this file was just migrated
-        local migrated=false
-        for f in "${legacy_files[@]}"; do
-            [ "$f" = "$rc_file" ] && migrated=true
-        done
-        if [ "$migrated" = "false" ]; then
-            auto_backup_rc "$rc_file" || {
-                utils_show_status "error" "Could not back up $rc_file; leaving it unchanged"
-                return 1
-            }
-        fi
         printf '\n%s\n%s\n' "$AUTO_INIT_MARKER" "$init_line" >> "$rc_file"
         utils_show_status "success" "Added per-shell switching to $rc_file"
     fi
