@@ -35,6 +35,8 @@ Unit tests call module functions directly. CLI tests (`07_cli.bats`) run the bui
 | `05_shell.bats` | rc file selection, managed-block insert and replace for zsh, bash and fish, backups |
 | `06_switch.bats` | unlink-before-link order, rc update, no-op when already active, `auto_switch_php` |
 | `07_cli.bats` | Flag dispatch and exit codes, `--get-project-version`, `--auto-mode` |
+| `09_shell_integration.bats` | `init` output (bash/zsh/fish syntax, speed), `__php-dir`, the hook in real bash 3.2/zsh: PATH hygiene, nested shells, `use` pinning, nounset, parity with `version_check_project` |
+| `10_install_auto_switch.bats` | rc install and migration against real legacy fixtures (`tests/fixtures/`): backups, all-or-nothing, symlinked rc files, idempotency, login-shell targeting |
 | `08_update.bats` | `--update`: Homebrew deferral, no downgrade, checksum missing or mismatched, version mismatch, exit status |
 
 ## Gotchas

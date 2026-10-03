@@ -32,3 +32,7 @@ Added [[concepts/release-and-update]]. `--update` now uses the latest release an
 ## [2026-10-03] ingest | Phase 3a per-shell integration
 
 Added [[concepts/shell-integration]] for `lib/init.sh` (`init`, `use`/`local`/`global`, `__php-dir`, and the pure-shell hook with parity to `version_check_project`). Updated the module pipeline, the auto-switch banner, the index and the roadmap (3a done; 3b is migration). README, CLAUDE.md and AGENTS.md updated.
+
+## [2026-10-03] ingest | Phase 3b install and migration
+
+`--install-auto-switch` now installs the per-shell integration for the login shell and migrates legacy hooks from every rc file (all-or-nothing, backups, write-through for symlinked rc files). Documented in [[concepts/shell-integration]]. Added legacy fixtures and `10_install_auto_switch.bats`. Recorded the pre-existing `shell_detect_shell` and `.bash_profile` issues in [[decisions/roadmap-2026]].

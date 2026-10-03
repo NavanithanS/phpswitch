@@ -9,7 +9,7 @@ sources: 1
 
 # Auto-Switch
 
-> **v2:** per-shell switching via `eval "$(phpswitch init <shell>)"` replaces this legacy global hook. See [[concepts/shell-integration]]. The legacy hook below still works for users who haven't migrated.
+> **v2:** per-shell switching via `eval "$(phpswitch init <shell>)"` replaces this legacy global hook. See [[concepts/shell-integration]]. The legacy hook below still works for users who haven't migrated. `--install-auto-switch` now installs the v2 integration and migrates this hook away.
 
 PHPSwitch can automatically switch the active PHP version when you `cd` into a directory that declares a PHP version requirement.
 

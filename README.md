@@ -107,8 +107,8 @@ phpswitch --project, -p              switch to project version
 phpswitch --clear-cache              clear cached data
 phpswitch --refresh-cache            refresh available versions cache
 phpswitch --fix-permissions          fix cache directory permissions
-phpswitch --install-auto-switch      enable directory-based auto-switching
-phpswitch --clear-directory-cache    clear auto-switching directory cache
+phpswitch --install-auto-switch      add per-shell switching to your rc file
+phpswitch --clear-directory-cache    clear legacy auto-switching cache
 phpswitch --check-dependencies       check system dependencies
 phpswitch --install                  install as a system command
 phpswitch --uninstall                remove from system
@@ -164,17 +164,15 @@ phpswitch -p        # switch to the project version
 
 ### Auto-switching
 
-Enable automatic PHP switching when you change directories:
+Set up per-shell switching in your shell config automatically:
 
 ```bash
 phpswitch --install-auto-switch
 ```
 
-Once enabled, opening a directory that contains a `.php-version` file automatically switches to that version. Uses a cache to avoid redundant checks.
+This adds the `phpswitch init` line (see [Per-shell switching](#per-shell-switching-recommended)) to the rc file of your login shell (`$SHELL`), after making a backup. Each terminal then follows the project's PHP version when you `cd`, and other terminals, PHP-FPM and your IDE are unaffected.
 
-```bash
-phpswitch --clear-directory-cache   # force rescan
-```
+**Upgrading from 1.x:** the old auto-switch hook relinked PHP globally (and restarted PHP-FPM) on every `cd`. `--install-auto-switch` removes it from `.zshrc`, `.bashrc`, `.bash_profile`, `.profile` and `config.fish`, backing each file up first. If a block can't be identified safely, no file is changed and you're asked to remove it by hand. To change the global version (for PHP-FPM, Valet or your IDE), use `phpswitch global VERSION`.
 
 ### Managing extensions
 
@@ -255,10 +253,11 @@ brew install php@8.3   # try manually
 
 ### Auto-switching not working
 
-1. Run `phpswitch --install-auto-switch` to (re)install the shell hook
-2. Restart your terminal or source your shell config
-3. Check `AUTO_SWITCH_PHP_VERSION=true` in `~/.phpswitch.conf`
-4. Run `phpswitch --clear-directory-cache` to clear stale cache
+1. Run `phpswitch --install-auto-switch` to add the integration line (and remove any legacy hook)
+2. Open a new terminal, or `source` your shell config
+3. Check that `echo $PHPSWITCH_BIN` prints a path. If it doesn't, the `phpswitch init` line isn't being loaded. On macOS, bash login shells read `~/.bash_profile`, so source `~/.bashrc` from it.
+4. Make sure `phpswitch use` isn't pinning a version: `phpswitch use auto`
+5. A hand-edited `.php-version` takes effect on the next `cd`
 
 ### Debug mode
 
