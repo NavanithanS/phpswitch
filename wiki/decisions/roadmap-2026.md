@@ -122,6 +122,10 @@ Rough priority order. Confidence in brackets.
 
 ## Cross-cutting (fold into any phase that touches the code)
 
+**Done in 4b (2026-10-03):** sudo reduction and non-interactive safety. `--yes` already existed; prompts are now EOF-safe, the menu refuses to start without a TTY, and unknown arguments exit 2. See the AGENTS.md section on privileges and prompts.
+
+- **`shell_update_rc` (the `--switch`/`global` PATH block)** uses `shell_detect_shell` (always `bash` inside phpswitch) and `mv` (which replaces symlinked rc files). It violates the AGENTS.md rc-editing rule, so fix it with the login shell (`$SHELL`) plus write-through.
+
 - **Reduce sudo (F8):** print the exact fix command instead of escalating. Keep `sudo` only for `/usr/local/bin` installs, and only when the user asks for it explicitly.
 - **Non-interactive mode:** `--yes` / `--no` flags, and auto-detect when there's no TTY (`[ -t 0 ]`), so prompts never hang in CI or scripts.
 - **Split `commands.sh` (F9):** `cmd/dispatch.sh`, `cmd/menu.sh`, `cmd/install.sh`, `cmd/update.sh`. Update the module order in `build.sh` and in [[architecture/module-pipeline]].

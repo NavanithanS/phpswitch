@@ -40,3 +40,7 @@ Added [[concepts/shell-integration]] for `lib/init.sh` (`init`, `use`/`local`/`g
 ## [2026-10-03] ingest | Phase 4a doctor
 
 Added [[concepts/doctor]] (`lib/doctor.sh`), which replaced the two `utils_diagnose_*` functions; menu `d` now runs it. Roadmap: `use`/`local`/`global` and `--json` marked done; Valet and PECL deferred pending a user decision. Module order updated in CLAUDE.md and [[architecture/module-pipeline]].
+
+## [2026-10-03] lint | Phase 4b hangs and sudo reduction
+
+Prompts are EOF-safe, the menu needs a TTY, and unknown arguments exit 2. Automatic sudo was removed everywhere except explicit install/uninstall/update (`utils_run_for_dir`) and the consent-gated FPM fix. README install no longer uses `sudo` on the whole script. Added the `shell_update_rc` cross-cutting item to [[decisions/roadmap-2026]].

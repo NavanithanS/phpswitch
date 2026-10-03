@@ -36,3 +36,8 @@ This repository includes a structured wiki in the `wiki/` directory that serves 
 
 ## 7. Doctor
 - `phpswitch doctor` must stay read-only (no network, sudo, writes or service calls). New checks go in `lib/doctor.sh` with a test in `tests/11_doctor.bats`. Don't add a second diagnostics path.
+
+## 8. Privileges and prompts
+- Never escalate automatically. Print the exact `sudo` command instead. The only exceptions are explicit install, uninstall and update actions, through `utils_run_for_dir` (which uses sudo only when the target directory isn't writable), and the FPM root-leftover fix, which shows the commands and asks first (default no).
+- Never suggest `sudo brew services`: it makes Homebrew files root-owned.
+- Every prompt must survive EOF. Use `utils_validate_yes_no` (on EOF it returns the default, or "n"). The interactive menu refuses to start without a TTY, and unknown arguments exit 2.

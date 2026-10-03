@@ -36,8 +36,10 @@ brew install phpswitch
 
 ```bash
 curl -L https://raw.githubusercontent.com/NavanithanS/phpswitch/master/php-switcher.sh \
-  -o /tmp/php-switcher.sh && chmod +x /tmp/php-switcher.sh && sudo /tmp/php-switcher.sh --install
+  -o /tmp/php-switcher.sh && chmod +x /tmp/php-switcher.sh && /tmp/php-switcher.sh --install
 ```
+
+`--install` asks for your password only if the install directory isn't writable. Don't run the whole script with `sudo`: that leaves root-owned files in your home directory.
 
 ### Manual
 
@@ -45,7 +47,7 @@ curl -L https://raw.githubusercontent.com/NavanithanS/phpswitch/master/php-switc
 git clone https://github.com/NavanithanS/phpswitch.git
 cd phpswitch
 chmod +x php-switcher.sh
-sudo ./php-switcher.sh --install
+./php-switcher.sh --install
 ```
 
 ## Usage
