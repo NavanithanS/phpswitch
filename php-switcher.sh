@@ -968,6 +968,103 @@ function utils_compare_versions {
     fi
 }
 
+# Installed PHP series (X.Y), ascending, from the Homebrew prefix.
+# Uses a glob rather than `brew list`: this runs on cd via the shell hook.
+function utils_installed_php_series {
+    local d target
+    {
+        for d in "$HOMEBREW_PREFIX"/opt/php@*; do
+            [ -x "$d/bin/php" ] && printf '%s\n' "${d##*/php@}"
+        done
+        # The unversioned formula links opt/php -> ../Cellar/php/X.Y.Z
+        if [ -x "$HOMEBREW_PREFIX/opt/php/bin/php" ]; then
+            target=$(readlink "$HOMEBREW_PREFIX/opt/php" 2>/dev/null)
+            [[ "$target" =~ /php/([0-9]+)\.([0-9]+) ]] && printf '%s.%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+        fi
+    } | grep -E '^[0-9]+\.[0-9]+$' | sort -t. -k1,1n -k2,2n -u
+}
+
+# Does PHP series X.Y (any patch release) satisfy a composer constraint?
+# Supports ||, |, AND via spaces/commas, ^, ~, >=, >, <=, <, =, !=,
+# wildcards (8.*, 8.1.*, *), bare versions and hyphen ranges (8.1 - 8.3).
+# Unparseable constraints never match.
+function utils_composer_constraint_matches {
+    local constraint="$1" series="$2"
+    [[ "$series" =~ ^[0-9]+\.[0-9]+$ ]] || return 1
+    local m=$(( ${series%%.*} * 100 + ${series#*.} ))
+    local group atom
+
+    constraint="${constraint//||/|}"
+    local IFS='|'
+    local -a groups
+    read -ra groups <<< "$constraint"
+    for group in "${groups[@]}"; do
+        # Hyphen range: "A.B - C.D"
+        group=$(printf '%s' "$group" | sed -E 's/([0-9.*]+) +- +([0-9.*]+)/>=\1 <=\2/g; s/,/ /g')
+        local ok=true seen=false
+        local -a atoms
+        # read -a splits without glob expansion (a bare "*" must stay "*")
+        IFS=' ' read -ra atoms <<< "$group"
+        for atom in "${atoms[@]}"; do
+            seen=true
+            utils_composer_atom_matches "$atom" "$m" || { ok=false; break; }
+        done
+        if [ "$seen" = "true" ] && [ "$ok" = "true" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# One constraint atom against series number m (X*100+Y); 2 = unparseable
+function utils_composer_atom_matches {
+    local atom="$1" m="$2" op
+    # Callers may have changed IFS; bash 3.2 then mangles "|" in regexes
+    local IFS=$' \t\n'
+    local atom_re='^(\^|~|>=|<=|>|<|==|=|!=)?v?([0-9]+|\*)(\.([0-9]+|\*))?(\.([0-9]+|\*))?$'
+    atom="${atom%@*}"          # stability flags (@dev)
+    if [[ "$atom" =~ $atom_re ]]; then
+        op="${BASH_REMATCH[1]}"
+        local maj="${BASH_REMATCH[2]}" min="${BASH_REMATCH[4]}" pat="${BASH_REMATCH[6]}"
+    else
+        return 2
+    fi
+    [ "$maj" = "*" ] && return 0
+    local major=$(( m / 100 ))
+    local base=$(( maj * 100 + ${min//\*/0} ))
+    [ -z "$min" ] && base=$(( maj * 100 ))
+
+    case "$op" in
+        "^")
+            [ "$m" -ge "$base" ] && [ "$major" -eq "$maj" ] ;;
+        "~")
+            if [ -n "$pat" ] || [ -z "$min" ]; then
+                # ~8.1.2 -> 8.1.x ; ~8 -> 8.x
+                if [ -z "$min" ]; then [ "$major" -eq "$maj" ]; else [ "$m" -eq "$base" ]; fi
+            else
+                [ "$m" -ge "$base" ] && [ "$major" -eq "$maj" ]
+            fi ;;
+        ">="|">")
+            [ "$m" -ge "$base" ] ;;
+        "<=")
+            if [ -z "$min" ]; then [ "$major" -le "$maj" ]; else [ "$m" -le "$base" ]; fi ;;
+        "<")
+            # < 8.2 / < 8.2.0 excludes the whole 8.2 series; < 8.2.3 includes 8.2.0
+            if [ -z "$min" ]; then
+                [ "$major" -lt "$maj" ]
+            elif [ -n "$pat" ] && [ "$pat" != "0" ] && [ "$pat" != "*" ]; then
+                [ "$m" -le "$base" ]
+            else
+                [ "$m" -lt "$base" ]
+            fi ;;
+        "!=")
+            return 0 ;;
+        *)
+            # =, == or bare: 8 -> 8.x, 8.1 / 8.1.3 / 8.1.* -> 8.1
+            if [ -z "$min" ] || [ "$min" = "*" ]; then [ "$major" -eq "$maj" ]; else [ "$m" -eq "$base" ]; fi ;;
+    esac
+}
+
 # Function to read PHP version from composer.json
 # Uses grep/sed to avoid jq dependency
 function utils_read_composer_version {
@@ -997,11 +1094,29 @@ function utils_read_composer_version {
     require_php=$(grep -A 20 '"require"' "$composer_file" 2>/dev/null | grep '"php"' | head -n 1)
     
     if [ -n "$require_php" ]; then
-        # Extract version: "php": "^8.1" -> 8.1
+        # Extract constraint: "php": "^8.1 || ^8.2" -> ^8.1 || ^8.2
         local version
         version=$(echo "$require_php" | sed -E 's/.*"php": *"([^"]+)".*/\1/')
-        # extract major.minor
-        echo "$version" | grep -oE '[0-9]+\.[0-9]+' | head -n 1
+        # 1. Keep the historical answer (first X.Y in the constraint) when it is
+        #    installed and satisfies the constraint, so working projects never move
+        # 2. Otherwise use the lowest installed series that satisfies it
+        # 3. Otherwise fall back to the historical answer
+        local first series installed
+        first=$(echo "$version" | grep -oE '[0-9]+\.[0-9]+' | head -n 1)
+        installed=$(utils_installed_php_series)
+        if [ -n "$first" ] && printf '%s\n' "$installed" | grep -qx "$first" &&
+           utils_composer_constraint_matches "$version" "$first"; then
+            echo "$first"
+            return 0
+        fi
+        while IFS= read -r series; do
+            [ -n "$series" ] || continue
+            if utils_composer_constraint_matches "$version" "$series"; then
+                echo "$series"
+                return 0
+            fi
+        done <<< "$installed"
+        echo "$first"
         return 0
     fi
     

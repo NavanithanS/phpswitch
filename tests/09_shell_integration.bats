@@ -230,6 +230,12 @@ hook_dir() {
     [ "$(expected_dir "$PROJECT/src/deep")" = "$FAKE_BREW_PREFIX/opt/php@8.3" ]
     rm "$PROJECT/src/composer.json" "$PROJECT/.php-version"
 
+    # composer range resolves to the lowest installed match (8.1 isn't >= 8.2)
+    printf '{ "require": { "php": ">=8.2 <8.4" } }\n' > "$PROJECT/composer.json"
+    [ "$(hook_dir "$PROJECT")" = "$FAKE_BREW_PREFIX/opt/php@8.2" ]
+    [ "$(expected_dir "$PROJECT")" = "$FAKE_BREW_PREFIX/opt/php@8.2" ]
+    rm "$PROJECT/composer.json"
+
     # .tool-versions
     printf 'php 8.2.4\n' > "$PROJECT/.tool-versions"
     [ "$(hook_dir "$PROJECT")" = "$FAKE_BREW_PREFIX/opt/php@8.2" ]
