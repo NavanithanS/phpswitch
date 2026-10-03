@@ -41,3 +41,4 @@ This repository includes a structured wiki in the `wiki/` directory that serves 
 - Never escalate automatically. Print the exact `sudo` command instead. The only exceptions are explicit install, uninstall and update actions, through `utils_run_for_dir` (which uses sudo only when the target directory isn't writable), and the FPM root-leftover fix, which shows the commands and asks first (default no).
 - Never suggest `sudo brew services`: it makes Homebrew files root-owned.
 - Every prompt must survive EOF. Use `utils_validate_yes_no` (on EOF it returns the default, or "n"). The interactive menu refuses to start without a TTY, and unknown arguments exit 2.
+- New subcommands or flags must be added to `--help` and to `COMPLETION_SUBCOMMANDS`/`COMPLETION_FLAGS` in `lib/completions.sh`. The drift test enforces this.

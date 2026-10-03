@@ -17,6 +17,12 @@ sources: 0
 4. Tags `vX.Y.Z` and creates a GitHub Release with **both** `php-switcher.sh` and `php-switcher.sh.sha256` as assets.
 5. Hashes the source tarball of the tag and patches `Formula/phpswitch.rb` (url and sha256). Copies the formula to the tap repo (`../homebrew-phpswitch` or `$TAP_REPO`).
 
+## Release-time follow-ups
+
+- **Formula completions:** once a release containing `phpswitch completions` is cut, add this to `Formula/phpswitch.rb` (and the tap):
+  `generate_completions_from_executable(bin/"phpswitch", "completions")`
+  Don't add it before then. The formula still installs v1.4.4, which opens the interactive menu on an unknown word, so `brew install` would hang.
+
 ## Self-update (`phpswitch --update` → `cmd_update_self`)
 
 ```

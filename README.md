@@ -98,6 +98,7 @@ phpswitch global VERSION             switch the global (Homebrew-linked) version
 phpswitch local VERSION              write .php-version in the current directory
 phpswitch init zsh|bash|fish         print shell integration code
 phpswitch doctor                     check your PHP setup (read-only)
+phpswitch completions zsh|bash|fish  print shell completions
 phpswitch --switch=VERSION           switch to version (same as global)
 phpswitch --switch-force=VERSION     switch, installing if needed
 phpswitch --install=VERSION          install a version
@@ -142,6 +143,17 @@ phpswitch local 8.3    # write .php-version here
 ```
 
 When you `cd`, the current shell switches to the project's PHP version (`.php-version`, `composer.json`, `.tool-versions`) and switches back when you leave. Other terminals, PHP-FPM and your IDE are not affected. Changes made by hand to `.php-version` take effect on the next `cd`.
+
+### Shell completions
+
+```bash
+# ~/.zshrc (after compinit)
+eval "$(phpswitch completions zsh)"
+# ~/.bashrc
+eval "$(phpswitch completions bash)"
+# fish
+phpswitch completions fish > ~/.config/fish/completions/phpswitch.fish
+```
 
 ### Switching versions globally
 

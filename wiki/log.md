@@ -48,3 +48,7 @@ Prompts are EOF-safe, the menu needs a TTY, and unknown arguments exit 2. Automa
 ## [2026-10-03] lint | Login-shell detection and atomic rc writes
 
 `shell_detect_shell` now prefers `$SHELL`. Added `utils_replace_file_contents` (atomic, follows symlinks, keeps the mode), used by `shell_update_rc` and the 3b migration. The config menu detects the v2 integration marker. Updated [[concepts/shell-patching]], [[concepts/shell-integration]] and [[decisions/roadmap-2026]].
+
+## [2026-10-03] ingest | Phase 4c shell completions
+
+Added `lib/completions.sh` (`phpswitch completions bash|zsh|fish`), with a drift test against `--help`. The formula line is deferred to the next release ([[concepts/release-and-update]]). Updated the module order in CLAUDE.md and [[architecture/module-pipeline]].

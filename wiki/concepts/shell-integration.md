@@ -61,3 +61,8 @@ Leaving a project removes the per-shell entry, so the global version shows throu
 - [[concepts/auto-switch]]
 - [[concepts/shell-patching]]
 - [[decisions/roadmap-2026]]
+
+## Completions (`lib/completions.sh`)
+
+`phpswitch completions <bash|zsh|fish>` prints a completion script. It's kept separate from `init` so shell startup stays fast. Installed versions come from globbing the prefix baked in at generation time, so completing never runs `brew` or phpswitch. Subcommands and flags live in `COMPLETION_SUBCOMMANDS` and `COMPLETION_FLAGS`, and `tests/13_completions.bats` fails if they drift from `--help`. In bash, "no trailing space" applies only to `--flag=` completions, and only where `compopt` exists (bash 4+).
+

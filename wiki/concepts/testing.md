@@ -37,6 +37,9 @@ Unit tests call module functions directly. CLI tests (`07_cli.bats`) run the bui
 | `07_cli.bats` | Flag dispatch and exit codes, `--get-project-version`, `--auto-mode` |
 | `09_shell_integration.bats` | `init` output (bash/zsh/fish syntax, speed), `__php-dir`, the hook in real bash 3.2/zsh: PATH hygiene, nested shells, `use` pinning, nounset, parity with `version_check_project` |
 | `10_install_auto_switch.bats` | rc install and migration against real legacy fixtures (`tests/fixtures/`): backups, all-or-nothing, symlinked rc files, idempotency, login-shell targeting |
+| `11_doctor.bats` | `doctor` checks and its read-only guarantee |
+| `12_noninteractive.bats` | EOF-safe prompts, no menu without a TTY, unknown arguments, sudo used only with consent or for unwritable dirs |
+| `13_completions.bats` | Completion words match `--help`; bash completion driven functionally; zsh registration; fish syntax (CI) |
 | `08_update.bats` | `--update`: Homebrew deferral, no downgrade, checksum missing or mismatched, version mismatch, exit status |
 
 ## Gotchas
