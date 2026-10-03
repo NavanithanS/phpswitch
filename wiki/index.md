@@ -30,6 +30,7 @@ Content catalog. Updated on every ingest. The LLM reads this first when answerin
 | [[entities/lib-extensions]] | PHP extension enable/disable/info |
 | [[entities/lib-auto-switch]] | Directory-based auto-switching hooks |
 | [[entities/lib-commands]] | CLI argument parsing and dispatch |
+| [[concepts/shell-integration]] (`lib/init.sh`) | Per-shell integration module |
 
 ## Concepts
 
@@ -41,6 +42,7 @@ Content catalog. Updated on every ingest. The LLM reads this first when answerin
 | [[concepts/shell-patching]] | How PATH exports are appended/updated in shell rc files |
 | [[concepts/fpm-management]] | Starting, stopping, and restarting PHP-FPM per version |
 | [[concepts/testing]] | bats harness (fake brew/curl/sudo, isolated HOME), suites, CI pipeline |
+| [[concepts/shell-integration]] | v2 per-shell switching: `init`, wrapper, pure-shell hook, invariants |
 | [[concepts/release-and-update]] | release.sh flow and the fail-closed, checksum-verified `--update` |
 
 ## Decisions

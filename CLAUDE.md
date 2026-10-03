@@ -22,7 +22,8 @@ phpswitch/
     ├── version.sh        # PHP version detection, install/uninstall/switch
     ├── fpm.sh            # PHP-FPM service management
     ├── extensions.sh     # PHP extension enable/disable/info
-    ├── auto-switch.sh    # Directory-based auto-switching hooks
+    ├── auto-switch.sh    # Legacy directory-based auto-switching hooks
+    ├── init.sh           # Per-shell integration (phpswitch init / use)
     └── commands.sh       # CLI argument parsing and dispatch
 ```
 
@@ -70,11 +71,12 @@ Or test the built artifact:
 
 ## Architecture Notes
 
-- **Single-file distribution**: `build.sh` strips shebangs from each module and concatenates them in order (`defaults → core → utils → shell → version → fpm → extensions → auto-switch → commands`) with a two-line main block appended at the end. The result is a self-contained script.
+- **Single-file distribution**: `build.sh` strips shebangs from each module and concatenates them in order (`defaults → core → utils → shell → version → fpm → extensions → auto-switch → init → commands`) with a two-line main block appended at the end. The result is a self-contained script.
 - **Configuration**: Loaded from `~/.phpswitch.conf` at startup via `core_load_config`. Missing keys fall back to defaults defined in `config/defaults.sh`.
 - **Caching**: Available PHP versions are cached under `~/.cache/phpswitch/` (or a user-configured path). Cache TTL is 1 hour. The `--clear-cache` / `--refresh-cache` flags manage this.
 - **Shell config patching**: `lib/shell.sh` detects the user's shell and appends/updates `export PATH=...` lines in `~/.zshrc`, `~/.bashrc`, or `~/.config/fish/config.fish`. Backups are created before modification.
-- **Auto-switching**: `lib/auto-switch.sh` installs `chpwd` hooks (zsh) or `cd` wrappers (bash/fish) that read `.php-version` files when directories change. Supports `.php-version`, `composer.json` (`require.php`), and `.tool-versions`.
+- **Per-shell switching (v2)**: `lib/init.sh` prints shell code (`eval "$(phpswitch init zsh)"`) defining a `phpswitch` wrapper and a pure-shell directory hook that edits PATH in the current shell only. See `wiki/concepts/shell-integration.md`.
+- **Auto-switching (legacy)**: `lib/auto-switch.sh` installs `chpwd` hooks (zsh) or `cd` wrappers (bash/fish) that read `.php-version` files when directories change. Supports `.php-version`, `composer.json` (`require.php`), and `.tool-versions`.
 - **PHP version format**: Internally versions are normalized to `php@X.Y` (e.g. `php@8.2`). User-facing input accepts bare `8.2` or `php@8.2`.
 
 ## Project Documentation (Wiki)

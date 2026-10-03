@@ -76,6 +76,8 @@ The `sleep 1` loop in `core.sh:280-284` is a timeout guard for `brew search`, so
 
 ## Phase 3: Per-shell switching and a fast hook (v2.0)
 
+**3a ✅ (2026-10-03):** `init`, the wrapper, the hook, and `use`/`local`/`global`. See [[concepts/shell-integration]]. **3b:** `--install-auto-switch` writes the `eval` line and migrates legacy blocks.
+
 **Goal:** fix F1 and F2. This is a breaking change.
 
 **Design constraint:** a child process can't change its parent shell's `PATH`, so per-shell switching needs a shell function loaded from the rc file:
@@ -134,6 +136,7 @@ Rough priority order. Confidence in brackets.
 | Phase 2 | `release.sh` runs `git add .` when bumping the version, which could commit stray files. | `tools/release.sh` |
 | Phase 2 | The README install command `curl`s from raw `master`, not a release asset. | `README.md:38` |
 | Phase 2 | The checksum is published by the same GitHub release as the script, so it doesn't protect against a compromised account. Consider minisign or `gh attestation`. | `lib/commands.sh` `cmd_update_self` |
+| Phase 3a | The menu's "Disable auto-switching" only flips the config value. The legacy rc hook keeps running. | `lib/commands.sh` auto-switch menu |
 | Phase 1 | `--auto-mode` uses the fixed lock path `/tmp/phpswitch_<uid>.lock`, so tests share it with the real hook. | `phpswitch.sh`, build main block |
 
 ## Suggested sequencing

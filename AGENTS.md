@@ -26,3 +26,9 @@ This repository includes a structured wiki in the `wiki/` directory that serves 
 ## 5. Releases
 - Always release with `tools/release.sh`. It bumps `PHPSWITCH_VERSION` in `config/defaults.sh`, creates a `vX.Y.Z` tag, and uploads `php-switcher.sh` together with `php-switcher.sh.sha256`, then patches the Homebrew formula.
 - `phpswitch --update` **refuses** any release that doesn't include `php-switcher.sh.sha256`, so never create releases by hand without it. See `wiki/concepts/release-and-update.md`.
+
+## 6. Per-shell integration (`lib/init.sh`)
+- The code printed by `phpswitch init` is `eval`'d at **every shell startup**. It must stay valid bash 3.2, zsh and fish, print no banner, and stay fast. Commands it relies on (`init`, `__php-dir`) skip the banner and the dependency check.
+- The binary must never print shell code for the hook to `eval`. `__php-dir` prints only a directory, and the shell validates it with `_phpswitch_valid_dir`.
+- The hook's fast path must keep matching `version_check_project`. Any change to detection rules needs the parity test in `tests/09_shell_integration.bats` updated.
+- Generated code must be safe under `set -u`, and must only ever remove its own PATH entries.

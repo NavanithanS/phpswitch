@@ -28,3 +28,7 @@ Added [[concepts/testing]] (fake brew, isolated HOME, suites 03–07, CI pipelin
 ## [2026-10-03] ingest | Phase 2 release & update hardening
 
 Added [[concepts/release-and-update]]. `--update` now uses the latest release and verifies its SHA-256 (fails closed), defers Homebrew installs to `brew upgrade`, and never downgrades. release.sh publishes the checksum asset. The repo formula is synced to the tap (v1.4.4). Marked Phase 2 done in [[decisions/roadmap-2026]].
+
+## [2026-10-03] ingest | Phase 3a per-shell integration
+
+Added [[concepts/shell-integration]] for `lib/init.sh` (`init`, `use`/`local`/`global`, `__php-dir`, and the pure-shell hook with parity to `version_check_project`). Updated the module pipeline, the auto-switch banner, the index and the roadmap (3a done; 3b is migration). README, CLAUDE.md and AGENTS.md updated.

@@ -3,11 +3,13 @@ title: Auto-Switch
 category: concept
 tags: [auto-switch, cd, hooks, directory, php-version]
 created: 2026-04-06
-updated: 2026-04-06
+updated: 2026-10-03
 sources: 1
 ---
 
 # Auto-Switch
+
+> **v2:** per-shell switching via `eval "$(phpswitch init <shell>)"` replaces this legacy global hook. See [[concepts/shell-integration]]. The legacy hook below still works for users who haven't migrated.
 
 PHPSwitch can automatically switch the active PHP version when you `cd` into a directory that declares a PHP version requirement.
 

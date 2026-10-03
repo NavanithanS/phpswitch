@@ -91,7 +91,11 @@ PHPSwitch  PHP Version Manager for macOS  v1.4.5
 
 ```
 phpswitch                            interactive menu
-phpswitch --switch=VERSION           switch to version
+phpswitch use VERSION|auto           use a version in this shell only (needs shell integration)
+phpswitch global VERSION             switch the global (Homebrew-linked) version
+phpswitch local VERSION              write .php-version in the current directory
+phpswitch init zsh|bash|fish         print shell integration code
+phpswitch --switch=VERSION           switch to version (same as global)
 phpswitch --switch-force=VERSION     switch, installing if needed
 phpswitch --install=VERSION          install a version
 phpswitch --uninstall=VERSION        uninstall a version
@@ -114,7 +118,29 @@ phpswitch --debug                    enable debug logging
 phpswitch --help, -h                 show this help
 ```
 
-### Switching versions
+### Per-shell switching (recommended)
+
+Add one line to your shell config so each terminal can use its own PHP version:
+
+```bash
+# ~/.zshrc  (use "init bash" in ~/.bashrc)
+eval "$(phpswitch init zsh)"
+
+# ~/.config/fish/config.fish
+phpswitch init fish | source
+```
+
+Then:
+
+```bash
+phpswitch use 8.2      # this shell only
+phpswitch use auto     # back to directory-based selection
+phpswitch local 8.3    # write .php-version here
+```
+
+When you `cd`, the current shell switches to the project's PHP version (`.php-version`, `composer.json`, `.tool-versions`) and switches back when you leave. Other terminals, PHP-FPM and your IDE are not affected. Changes made by hand to `.php-version` take effect on the next `cd`.
+
+### Switching versions globally
 
 ```bash
 phpswitch --switch=8.3
@@ -189,7 +215,8 @@ phpswitch/
     ├── version.sh        # version switching, install, uninstall
     ├── fpm.sh            # PHP-FPM service management
     ├── extensions.sh     # extension enable/disable
-    ├── auto-switch.sh    # directory-based auto-switching hooks
+    ├── auto-switch.sh    # legacy directory-based auto-switching hooks
+    ├── init.sh           # per-shell integration (phpswitch init / use)
     └── commands.sh       # CLI argument parsing and menu
 ```
 

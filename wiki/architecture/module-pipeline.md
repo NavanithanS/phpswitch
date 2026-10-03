@@ -21,8 +21,9 @@ The build concatenates modules in a specific order. This order encodes the depen
 5. lib/version.sh         # PHP version detection, install/uninstall/switch
 6. lib/fpm.sh             # PHP-FPM service management
 7. lib/extensions.sh      # PHP extension enable/disable/info
-8. lib/auto-switch.sh     # Directory-based auto-switching hooks
-9. lib/commands.sh        # CLI argument parsing and dispatch
+8. lib/auto-switch.sh     # Legacy directory-based auto-switching hooks
+9. lib/init.sh           # Per-shell integration (init / __php-dir)
+10. lib/commands.sh       # CLI argument parsing and dispatch
 --- (main block appended) ---
 ```
 
@@ -34,6 +35,7 @@ The build concatenates modules in a specific order. This order encodes the depen
 - Higher modules (`version`, `fpm`, `extensions`) depend on `utils` and `shell`.
 - `commands` depends on everything — it is the dispatcher that calls into all other modules.
 - `auto-switch` depends on `shell` (needs shell detection to install the right hook).
+- `init` depends on `version`, `core` and `utils` (project detection, resolution, validation). See [[concepts/shell-integration]].
 
 ## In development
 
