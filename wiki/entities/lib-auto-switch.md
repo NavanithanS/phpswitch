@@ -3,21 +3,24 @@ title: lib/auto-switch.sh
 category: entity
 tags: [module, auto-switch, hooks, cd, directory]
 created: 2026-04-06
-updated: 2026-04-06
+updated: 2026-10-03
 sources: 1
 ---
 
 # lib/auto-switch.sh
 
-Directory-based PHP version auto-switching.
+Installs per-shell switching into rc files, migrates the legacy hook, and keeps the legacy global auto-switch for unmigrated users.
 
 ## Responsibilities
 
-- Install shell hooks (`chpwd` for zsh, `cd` wrapper for bash/fish) via [[entities/lib-shell]]
-- On directory change: scan for `.php-version`, `composer.json`, `.tool-versions`
-- If a version declaration is found, trigger a version switch
+- `auto_install` (`--install-auto-switch`): writes the `phpswitch init` line into the login shell's rc file and removes 1.x `phpswitch_auto_detect_project` blocks from every rc file, all-or-nothing, with backups and atomic writes. See [[concepts/shell-integration]].
+- `auto_strip_legacy_hooks`, `auto_legacy_rc_candidates`, `auto_login_shell`, `auto_rc_file`: helpers for migration, also used by [[concepts/doctor]].
+- `auto_switch_php`: the legacy global relink used by `--auto-mode` (still called by unmigrated 1.x hooks).
+- `auto_clear_directory_cache`: clears the legacy hook's directory cache.
 
 ## See also
+
+- [[concepts/shell-integration]]
 
 - [[concepts/auto-switch]]
 - [[entities/lib-shell]]

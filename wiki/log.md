@@ -60,3 +60,7 @@ Added `lib/completions.sh` (`phpswitch completions bash|zsh|fish`), with a drift
 ## [2026-10-03] lint | Phase 4e split commands.sh
 
 Split `lib/commands.sh` into `commands.sh` (dispatch), `menu.sh` and `self-manage.sh` as a pure move: the sorted `declare -f` output is identical for the module set and for the built artifact. Updated the module order everywhere, [[entities/lib-commands]], and the README tree (which also gained the previously missing `doctor.sh` and `completions.sh`).
+
+## [2026-10-03] lint | Stale page sweep after roadmap phases
+
+Updated [[overview]], [[entities/lib-auto-switch]] and [[concepts/auto-switch]] to describe v2 behaviour and the removed 1.x installers.

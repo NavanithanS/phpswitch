@@ -15,13 +15,13 @@ PHPSwitch can automatically switch the active PHP version when you `cd` into a d
 
 ## How it works
 
-`lib/auto-switch.sh` installs a hook into the user's shell that fires on directory change:
+The legacy 1.x hook (`phpswitch_auto_detect_project`) fired on directory change and called `phpswitch --auto-mode`, which relinked PHP **globally** and restarted FPM:
 
-| Shell | Hook mechanism |
+| Shell | Legacy hook mechanism |
 |-------|---------------|
 | zsh | `chpwd` hook function |
-| bash | `cd` wrapper function |
-| fish | `cd` wrapper function |
+| bash | `PROMPT_COMMAND` |
+| fish | `--on-variable PWD` function |
 
 On each directory change, the hook looks for a version declaration file in the current directory (or its parents).
 
@@ -37,7 +37,7 @@ If a declaration is found, PHPSwitch switches to that version automatically. If 
 
 ## Installation
 
-The hook is installed by patching the shell rc file ([[concepts/shell-patching]]). Run `phpswitch --auto-switch` or the equivalent setup command to install.
+`phpswitch --install-auto-switch` now installs the v2 integration line and removes legacy hook blocks (see [[concepts/shell-integration]]). 1.x installers are no longer in the code; `--auto-mode` remains for unmigrated users.
 
 ## See also
 

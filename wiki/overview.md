@@ -3,7 +3,7 @@ title: PHPSwitch Overview
 category: overview
 tags: [project, cli, php, homebrew, macos]
 created: 2026-04-06
-updated: 2026-04-06
+updated: 2026-10-03
 sources: 1
 ---
 
@@ -16,8 +16,10 @@ PHPSwitch is a macOS CLI tool for switching between Homebrew-managed PHP version
 - Switch the active PHP version (symlinks, PATH) via an interactive menu or non-interactive flags
 - Manage PHP-FPM services (start/stop/restart per version)
 - Enable and disable PHP extensions
-- Auto-switch PHP version when entering a directory (reads `.php-version`, `composer.json`, `.tool-versions`)
-- Patch shell config files (`~/.zshrc`, `~/.bashrc`, `~/.config/fish/config.fish`) to export the correct PATH
+- Per-shell PHP switching (v2): `eval "$(phpswitch init zsh)"` gives each terminal its own version that follows the project (`.php-version`, `composer.json` constraints, `.tool-versions`). See [[concepts/shell-integration]].
+- Global switching (`phpswitch global`) via `brew link`, for PHP-FPM, Valet and IDEs
+- Read-only diagnostics (`phpswitch doctor`), shell completions, and a checksum-verified `--update`
+- Patch shell config files (`~/.zshrc`, `~/.bashrc`, `~/.config/fish/config.fish`) for the integration line and the global PATH block
 
 ## Key design choices
 
