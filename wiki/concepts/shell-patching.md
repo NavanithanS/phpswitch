@@ -35,3 +35,8 @@ Before any modification, `lib/shell.sh` creates a backup of the rc file. This is
 
 - [[entities/lib-shell]]
 - [[concepts/auto-switch]]
+
+## Update (2026-10-03)
+
+- The rc file is chosen from the **login shell** (`$SHELL`), because `shell_detect_shell` checks it first. Before, it always returned `bash`, since phpswitch runs under bash, so zsh users' blocks went into `.bashrc`.
+- The managed block is written with `utils_replace_file_contents`: a temp file next to the resolved target, given the same mode, then `mv`. The write is atomic and symlinked dotfiles survive.

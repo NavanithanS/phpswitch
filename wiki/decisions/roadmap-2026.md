@@ -124,7 +124,7 @@ Rough priority order. Confidence in brackets.
 
 **Done in 4b (2026-10-03):** sudo reduction and non-interactive safety. `--yes` already existed; prompts are now EOF-safe, the menu refuses to start without a TTY, and unknown arguments exit 2. See the AGENTS.md section on privileges and prompts.
 
-- **`shell_update_rc` (the `--switch`/`global` PATH block)** uses `shell_detect_shell` (always `bash` inside phpswitch) and `mv` (which replaces symlinked rc files). It violates the AGENTS.md rc-editing rule, so fix it with the login shell (`$SHELL`) plus write-through.
+- ✅ **`shell_update_rc` (2026-10-03):** `shell_detect_shell` now prefers the login shell (`$SHELL`), which fixes every caller: rc choice, reload scripts and messages. rc files are replaced atomically through `utils_replace_file_contents`, which follows symlinks and keeps the file mode. The 3b migration was also moved off a non-atomic `>` write. Leftover: zsh users who used `--switch` before this fix have a stale, harmless PATH block in `.bashrc`.
 
 - **Reduce sudo (F8):** print the exact fix command instead of escalating. Keep `sudo` only for `/usr/local/bin` installs, and only when the user asks for it explicitly.
 - **Non-interactive mode:** `--yes` / `--no` flags, and auto-detect when there's no TTY (`[ -t 0 ]`), so prompts never hang in CI or scripts.
@@ -140,7 +140,6 @@ Rough priority order. Confidence in brackets.
 | Phase 2 | `release.sh` runs `git add .` when bumping the version, which could commit stray files. | `tools/release.sh` |
 | Phase 2 | The README install command `curl`s from raw `master`, not a release asset. | `README.md:38` |
 | Phase 2 | The checksum is published by the same GitHub release as the script, so it doesn't protect against a compromised account. Consider minisign or `gh attestation`. | `lib/commands.sh` `cmd_update_self` |
-| Phase 3b | `shell_detect_shell` always returns `bash` inside phpswitch (it checks `$BASH_VERSION` first). As a result `shell_update_rc` (the `--switch` PATH block) writes `.bashrc` for zsh users, and its `mv` replaces symlinked rc files with regular files. | `lib/shell.sh` |
 | Phase 3b | On macOS, bash login shells read `.bash_profile`, not `.bashrc`, where both the legacy hooks and the integration line are written. | `lib/auto-switch.sh` `auto_rc_file` |
 | Phase 3a | The menu's "Disable auto-switching" only flips the config value. The legacy rc hook keeps running. | `lib/commands.sh` auto-switch menu |
 | Phase 1 | `--auto-mode` uses the fixed lock path `/tmp/phpswitch_<uid>.lock`, so tests share it with the real hook. | `phpswitch.sh`, build main block |

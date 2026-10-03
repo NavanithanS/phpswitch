@@ -44,3 +44,7 @@ Added [[concepts/doctor]] (`lib/doctor.sh`), which replaced the two `utils_diagn
 ## [2026-10-03] lint | Phase 4b hangs and sudo reduction
 
 Prompts are EOF-safe, the menu needs a TTY, and unknown arguments exit 2. Automatic sudo was removed everywhere except explicit install/uninstall/update (`utils_run_for_dir`) and the consent-gated FPM fix. README install no longer uses `sudo` on the whole script. Added the `shell_update_rc` cross-cutting item to [[decisions/roadmap-2026]].
+
+## [2026-10-03] lint | Login-shell detection and atomic rc writes
+
+`shell_detect_shell` now prefers `$SHELL`. Added `utils_replace_file_contents` (atomic, follows symlinks, keeps the mode), used by `shell_update_rc` and the 3b migration. The config menu detects the v2 integration marker. Updated [[concepts/shell-patching]], [[concepts/shell-integration]] and [[decisions/roadmap-2026]].
