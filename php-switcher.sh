@@ -743,271 +743,6 @@ function utils_validate_numeric_input {
     fi
 }
 
-# Function to help diagnose PATH issues
-function utils_diagnose_path_issues {
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "\n  "; utils_print_gradient "PATH Diagnostic" 192 132 252 103 232 249; printf "\n\n"
-    else
-        printf "\n  PATH Diagnostic\n\n"
-    fi
-
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "  "; utils_print_gradient "Current PATH:" 148 182 251 125 207 250; printf "\n"
-    else
-        printf "  Current PATH:\n"
-    fi
-    printf "%s" "$PATH" | tr ':' '\n' | nl | sed 's/^/  /'
-
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "\n  "; utils_print_gradient "PHP binaries in PATH:" 148 182 251 125 207 250; printf "\n"
-    else
-        printf "\n  PHP binaries in PATH:\n"
-    fi
-
-    local count=0
-    local old_IFS="$IFS"
-    IFS=:
-    for dir in $PATH; do
-        if [ -x "$dir/php" ]; then
-            count=$((count + 1))
-            local _ver _type
-            _ver=$("$dir/php" -v 2>/dev/null | head -n 1)
-            if [ -L "$dir/php" ]; then
-                _type="Symlink → $(readlink "$dir/php")"
-            else
-                _type="Direct binary"
-            fi
-            printf "  %d) %s/php\n" "$count" "$dir"
-            printf "     Version: %s\n" "${_ver:-could not determine}"
-            printf "     Type: %s\n\n" "$_type"
-        fi
-    done
-    IFS="$old_IFS"
-
-    if [ "$count" -eq 0 ]; then
-        utils_show_status "warning" "No PHP binaries found in PATH"
-    elif [ "$count" -gt 1 ]; then
-        utils_show_status "warning" "Multiple PHP binaries found in PATH. This may cause confusion."
-        printf "  The first one in the PATH will be used.\n"
-    fi
-    
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "\n  "; utils_print_gradient "Active PHP:" 148 182 251 125 207 250; printf "\n"
-    else
-        printf "\n  Active PHP:\n"
-    fi
-    command -v php
-    php -v | head -n 1
-
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "\n  "; utils_print_gradient "Expected PHP path for current version:" 148 182 251 125 207 250; printf "\n"
-    else
-        printf "\n  Expected PHP path for current version:\n"
-    fi
-    local current_version
-    current_version=$(core_get_current_php_version)
-    if [ "$current_version" = "php@default" ]; then
-        printf "  %s/opt/php/bin/php\n" "$HOMEBREW_PREFIX"
-    else
-        printf "  %s/opt/%s/bin/php\n" "$HOMEBREW_PREFIX" "$current_version"
-    fi
-    
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "\n  "; utils_print_gradient "Recommended actions:" 148 182 251 125 207 250; printf "\n"
-    else
-        printf "\n  Recommended actions:\n"
-    fi
-    printf "    1  Ensure the PHP version you want is first in your PATH\n"
-    printf "    2  Check for conflicting PHP binaries in your PATH\n"
-    printf "    3  Run 'hash -r' (bash/zsh) or 'rehash' (fish) to clear command hash table\n"
-    printf "    4  Open a new terminal session to ensure PATH changes take effect\n"
-}
-
-# Function to diagnose the PHP environment
-function utils_diagnose_php_environment {
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "\n  "; utils_print_gradient "PHP Environment Diagnostic" 192 132 252 103 232 249; printf "\n\n"
-    else
-        printf "\n  PHP Environment Diagnostic\n\n"
-    fi
-
-    # 1. Check all PHP binaries
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "  "; utils_print_gradient "PHP Binaries" 148 182 251 125 207 250; printf "\n"
-    else
-        printf "  PHP Binaries\n"
-    fi
-    if command -v php &>/dev/null; then
-        local php_path
-        php_path=$(command -v php)
-        printf "  Default PHP: %s\n" "$php_path"
-        if [ -L "$php_path" ]; then
-            printf "  Symlinked to: %s\n" "$(readlink "$php_path")"
-        fi
-        printf "  Version: %s\n" "$(php -v | head -n 1)"
-    else
-        printf "  No PHP binary found in PATH\n"
-    fi
-    printf "\n"
-
-    # 2. Check all installed PHP versions
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "\n  "; utils_print_gradient "Installed PHP Versions" 148 182 251 125 207 250; printf "\n"
-    else
-        printf "\n  Installed PHP Versions\n"
-    fi
-    local installed_versions
-    installed_versions=$(core_get_installed_php_versions)
-    if [ -n "$installed_versions" ]; then
-        printf "%s\n" "$installed_versions"
-    else
-        printf "  No PHP versions installed via Homebrew\n"
-    fi
-    printf "\n"
-
-    # 3. Check Homebrew PHP links
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "\n  "; utils_print_gradient "Homebrew PHP Links" 148 182 251 125 207 250; printf "\n"
-    else
-        printf "\n  Homebrew PHP Links\n"
-    fi
-    if [ -d "$HOMEBREW_PREFIX/opt" ]; then
-        find "$HOMEBREW_PREFIX/opt" -maxdepth 1 -name '*php*' | sort | while IFS= read -r p; do
-            printf "  %s\n" "$p"
-        done
-    else
-        printf "  No Homebrew opt directory found\n"
-    fi
-    printf "\n"
-
-    # 4. Check for conflicting PHP binaries
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "\n  "; utils_print_gradient "PHP in PATH" 148 182 251 125 207 250; printf "\n"
-    else
-        printf "\n  PHP in PATH\n"
-    fi
-    local old_IFS="$IFS"
-    IFS=:
-    for dir in $PATH; do
-        if [ -x "$dir/php" ]; then
-            local _ver _type
-            _ver=$("$dir/php" -v 2>/dev/null | head -n 1)
-            if [ -L "$dir/php" ]; then
-                _type="Symlink → $(readlink "$dir/php")"
-            else
-                _type="Direct binary"
-            fi
-            printf "  Found in: %s/php\n" "$dir"
-            printf "    Version: %s\n" "${_ver:-could not determine}"
-            printf "    Type: %s\n" "$_type"
-        fi
-    done
-    IFS="$old_IFS"
-    printf "\n"
-
-    # 5. Check shell config files for PHP path entries
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "\n  "; utils_print_gradient "Shell Configuration Files" 148 182 251 125 207 250; printf "\n"
-    else
-        printf "\n  Shell Configuration Files\n"
-    fi
-    local shell_type
-    shell_type=$(shell_detect_shell)
-    local -a config_files
-    if [ "$shell_type" = "zsh" ]; then
-        config_files=("$HOME/.zshrc" "$HOME/.zprofile")
-    elif [ "$shell_type" = "bash" ]; then
-        config_files=("$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile")
-    elif [ "$shell_type" = "fish" ]; then
-        config_files=("$HOME/.config/fish/config.fish")
-    else
-        config_files=("$HOME/.profile")
-    fi
-
-    for file in "${config_files[@]}"; do
-        if [ -f "$file" ]; then
-            printf "  %s\n" "$file"
-            grep -n "PATH.*php" "$file" | sed 's/^/    /' || printf "    No PHP PATH entries found\n"
-        fi
-    done
-    printf "\n"
-    
-    # 6. Check PHP modules
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "\n  "; utils_print_gradient "Loaded PHP Modules" 148 182 251 125 207 250; printf "\n"
-    else
-        printf "\n  Loaded PHP Modules\n"
-    fi
-    if command -v php &>/dev/null; then
-        php -m | grep -v "\[" | sort | head -n 20
-        # grep -c always prints a count (0 on no match), so no `|| echo` fallback
-        local module_count
-        module_count=$(php -m | grep -c -v "\[")
-        if [ "${module_count:-0}" -gt 20 ]; then
-            echo "...and $((module_count - 20)) more modules"
-        fi
-    else
-        echo "No PHP binary found to check modules"
-    fi
-    
-    
-    # 7. Check running PHP-FPM services
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "\n  "; utils_print_gradient "Running PHP-FPM Services" 148 182 251 125 207 250; printf "\n"
-    else
-        printf "\n  Running PHP-FPM Services\n"
-    fi
-    brew services list | grep -E "^php(@[0-9]\.[0-9])?" || echo "  No PHP services found"
-    echo ""
-    
-    # 8. Summary and recommendations
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "\n  "; utils_print_gradient "Summary" 148 182 251 125 207 250; printf "\n"
-    else
-        printf "\n  Summary\n"
-    fi
-    if command -v php &>/dev/null; then
-        php_version=$(php -v | head -n 1 | cut -d " " -f 2)
-        homebrew_linked=$(core_get_current_php_version)
-        
-        local brew_major_minor
-        brew_major_minor=$(echo "$homebrew_linked" | grep -oE "[0-9]+\.[0-9]+")
-        if [[ "$homebrew_linked" == php@* ]] && [[ "$php_version" != *"$brew_major_minor"* ]]; then
-            utils_show_status "warning" "Version mismatch detected"
-            echo "  The PHP version in use ($php_version) does not match the Homebrew-linked version ($homebrew_linked)"
-            echo ""
-            echo "Possible causes:"
-            echo "  1. Another PHP binary is taking precedence in your PATH"
-            echo "  2. Shell configuration files need to be updated or sourced"
-            echo "  3. The PHP binary might be a direct install or from another package manager"
-            echo ""
-            echo "Recommended actions:"
-            shell_type=$(shell_detect_shell)
-            if [ "$shell_type" = "zsh" ]; then
-                echo "  1. Try running: source ~/.zshrc"
-                echo "  2. Or open a new terminal window"
-            elif [ "$shell_type" = "bash" ]; then
-                echo "  1. Try running: source ~/.bashrc"
-                echo "  2. Or open a new terminal window"
-            elif [ "$shell_type" = "fish" ]; then
-                echo "  1. Try running: source ~/.config/fish/config.fish"
-                echo "  2. Or run: set -gx PATH $HOMEBREW_PREFIX/opt/$homebrew_linked/bin $HOMEBREW_PREFIX/opt/$homebrew_linked/sbin \$PATH; and rehash"
-            else
-                echo "  1. Try running: source ~/.profile"
-                echo "  2. Or open a new terminal window"
-            fi
-            echo "  3. Consider removing or renaming conflicting PHP binaries"
-        else
-            utils_show_status "success" "PHP environment looks healthy"
-            echo "  Current PHP version: $php_version"
-            echo "  Homebrew-linked version: $homebrew_linked"
-        fi
-    else
-        utils_show_status "error" "No PHP binary found in PATH"
-        echo "  Check your Homebrew installation and PATH environment variable"
-    fi
-}
-
 # Function to validate system dependencies
 function utils_check_dependencies {
     local silent="${1:-false}"
@@ -3430,6 +3165,176 @@ _phpswitch_hook
 EOF
 }
 
+# Module: doctor.sh
+# PHPSwitch Doctor
+# Read-only health checks: no network, no sudo, no writes, no service calls.
+# Exit status is non-zero when any check fails (warnings don't fail).
+
+# Where root-run PHP-FPM LaunchDaemons live (overridable for tests)
+DOCTOR_LAUNCH_DAEMONS_DIR="${PHPSWITCH_LAUNCH_DAEMONS_DIR:-/Library/LaunchDaemons}"
+
+_doctor_failures=0
+_doctor_warnings=0
+
+function doctor_ok {
+    printf "  [ok]   %s\n" "$1"
+}
+
+function doctor_warn {
+    _doctor_warnings=$((_doctor_warnings + 1))
+    printf "  [warn] %s\n" "$1"
+    [ -n "$2" ] && printf "         -> %s\n" "$2"
+    return 0
+}
+
+function doctor_fail {
+    _doctor_failures=$((_doctor_failures + 1))
+    printf "  [fail] %s\n" "$1"
+    [ -n "$2" ] && printf "         -> %s\n" "$2"
+    return 0
+}
+
+# Installed PHP opt dirs, without calling brew
+function doctor_installed_dirs {
+    local d
+    for d in "$HOMEBREW_PREFIX"/opt/php "$HOMEBREW_PREFIX"/opt/php@*; do
+        [ -x "$d/bin/php" ] && printf '%s\n' "$d"
+    done
+}
+
+function doctor_php_version_of {
+    "$1" -v 2>/dev/null | head -n 1 | cut -d ' ' -f 2
+}
+
+function doctor_run {
+    _doctor_failures=0
+    _doctor_warnings=0
+
+    printf "\n  PHPSwitch doctor\n\n"
+
+    # 1. Homebrew and installed versions
+    local installed
+    installed=$(doctor_installed_dirs)
+    if [ -z "$installed" ]; then
+        doctor_fail "No Homebrew PHP installed under $HOMEBREW_PREFIX/opt" "Install one with: phpswitch --install=8.3"
+    else
+        doctor_ok "Installed: $(printf '%s\n' "$installed" | sed "s|$HOMEBREW_PREFIX/opt/||" | tr '\n' ' ' | sed 's/ $//')"
+    fi
+
+    # 2. Global (Homebrew-linked) version
+    local linked
+    linked=$(core_get_current_php_version)
+    if [ -z "$linked" ] || [ "$linked" = "none" ]; then
+        doctor_warn "No PHP is linked globally" "Set one with: phpswitch global VERSION"
+    else
+        doctor_ok "Global (linked) version: $linked"
+    fi
+
+    # 3. Which php runs, and what was expected
+    local active expected expected_reason
+    active=$(command -v php 2>/dev/null)
+    if [ -n "${PHPSWITCH_PHP_DIR:-}" ]; then
+        expected="$PHPSWITCH_PHP_DIR/bin/php"
+        expected_reason="this shell's per-shell version"
+    else
+        expected="$HOMEBREW_PREFIX/bin/php"
+        expected_reason="the global version"
+    fi
+
+    if [ -z "$active" ]; then
+        doctor_fail "No php found on PATH" "Open a new terminal, or run: phpswitch global VERSION"
+    elif [ "$active" -ef "$expected" ]; then
+        doctor_ok "php on PATH: $active ($(doctor_php_version_of "$active")), matching $expected_reason"
+    else
+        doctor_warn "php on PATH is $active ($(doctor_php_version_of "$active")), expected $expected for $expected_reason" \
+            "Another PHP is ahead on PATH; check your shell config or remove the other install"
+    fi
+
+    # 4. Other PHP binaries on PATH (MAMP, Herd, system, ...)
+    local dir others="" old_IFS="$IFS"
+    IFS=:
+    for dir in $PATH; do
+        [ -x "$dir/php" ] || continue
+        [ -n "$active" ] && [ "$dir/php" -ef "$active" ] && continue
+        others="$others $dir/php"
+    done
+    IFS="$old_IFS"
+    if [ -n "$others" ]; then
+        doctor_warn "Other PHP binaries on PATH:$others" "Only the first one on PATH is used"
+    fi
+
+    # 5. Per-shell integration
+    local login_shell rc_file
+    if login_shell=$(auto_login_shell); then
+        rc_file=$(auto_rc_file "$login_shell")
+        if [ -f "$rc_file" ] && grep -qF "$AUTO_INIT_MARKER" "$rc_file"; then
+            if [ -n "${PHPSWITCH_BIN:-}" ]; then
+                doctor_ok "Per-shell switching is installed in $rc_file and loaded in this shell"
+            else
+                doctor_warn "Per-shell switching is in $rc_file but not loaded in this shell" "Open a new terminal or run: source $rc_file"
+            fi
+        elif [ -n "${PHPSWITCH_BIN:-}" ]; then
+            doctor_ok "Per-shell switching is loaded in this shell"
+        else
+            doctor_warn "Per-shell switching is not set up" "Run: phpswitch --install-auto-switch"
+        fi
+    else
+        doctor_warn "Login shell ${SHELL:-unknown} isn't supported for per-shell switching"
+    fi
+
+    if [ -n "${PHPSWITCH_PINNED:-}" ]; then
+        doctor_warn "This shell is pinned with 'phpswitch use'; project files are ignored" "Run: phpswitch use auto"
+    fi
+
+    # 6. Legacy global auto-switch hook
+    local legacy
+    legacy=$(auto_legacy_rc_candidates | tr '\n' ' ')
+    if [ -n "$legacy" ]; then
+        doctor_warn "Legacy auto-switch hook found in: $legacy" \
+            "It relinks PHP globally on every cd. Run: phpswitch --install-auto-switch"
+    fi
+
+    # 7. Project version for the current directory
+    local project project_dir
+    if project=$(version_check_project 2>/dev/null) && [ -n "$project" ]; then
+        if project_dir=$(init_php_dir 2>/dev/null); then
+            if [ -n "${PHPSWITCH_PHP_DIR:-}" ] && [ "$PHPSWITCH_PHP_DIR" != "$project_dir" ] && [ -z "${PHPSWITCH_PINNED:-}" ]; then
+                doctor_warn "Project wants $project but this shell uses $PHPSWITCH_PHP_DIR" "cd out and back in, or run: phpswitch use auto"
+            else
+                doctor_ok "Project version: $project"
+            fi
+        else
+            doctor_fail "Project wants $project, which isn't installed" "Install it with: phpswitch --install=${project#php@}"
+        fi
+    fi
+
+    # 8. PHP-FPM running as root (left behind by 'sudo brew services')
+    local plist roots=""
+    for plist in "$DOCTOR_LAUNCH_DAEMONS_DIR"/homebrew.mxcl.php*.plist; do
+        [ -f "$plist" ] && roots="$roots $(basename "$plist" .plist)"
+    done
+    if [ -n "$roots" ]; then
+        doctor_warn "PHP-FPM is registered to run as root:$roots" \
+            "Root services change file ownership; use the FPM menu's cleanup, then 'brew services start' without sudo"
+    fi
+
+    # 9. Root-owned files in PHP kegs (bounded search)
+    local root_owned
+    root_owned=$(find "$HOMEBREW_PREFIX/Cellar" -maxdepth 3 -path "*/Cellar/php*" -user root -print 2>/dev/null | head -n 1)
+    if [ -n "$root_owned" ]; then
+        doctor_warn "Root-owned files in Homebrew PHP (e.g. $root_owned)" \
+            "Fix with: sudo chown -R $(id -un) $HOMEBREW_PREFIX/Cellar/php*"
+    fi
+
+    printf "\n"
+    if [ "$_doctor_failures" -gt 0 ]; then
+        printf "  %d problem(s), %d warning(s)\n\n" "$_doctor_failures" "$_doctor_warnings"
+        return 1
+    fi
+    printf "  No problems found (%d warning(s))\n\n" "$_doctor_warnings"
+    return 0
+}
+
 # Module: commands.sh
 # PHPSwitch Command Line Parsing
 # Handles command line arguments and menu display
@@ -3509,6 +3414,10 @@ function cmd_parse_arguments {
                 exit 1
             fi
             cmd_non_interactive_switch "$2" "false"
+            exit $?
+            ;;
+        doctor)
+            doctor_run
             exit $?
             ;;
         local)
@@ -3673,6 +3582,7 @@ function cmd_parse_arguments {
         printf "    phpswitch use VERSION|auto           use a version in this shell only (needs shell integration)\n"
         printf "    phpswitch global VERSION             switch the global (Homebrew-linked) version\n"
         printf "    phpswitch local VERSION              write .php-version in the current directory\n"
+        printf "    phpswitch doctor                     check your PHP setup (read-only)\n"
         printf "    phpswitch init zsh|bash|fish         print shell integration; add to your rc file:\n"
         printf "                                           eval \"\$(phpswitch init zsh)\"\n"
         printf "    phpswitch --switch=VERSION           switch to version (same as global)\n"
@@ -4442,7 +4352,7 @@ function cmd_show_menu {
             return $?
         elif [ "$selection" = "d" ]; then
             valid_selection=true
-            utils_diagnose_path_issues
+            doctor_run
             # Return to main menu after diagnostics
             printf "\n  Press Enter to continue..."
             read -r

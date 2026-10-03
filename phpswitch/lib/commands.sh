@@ -79,6 +79,10 @@ function cmd_parse_arguments {
             cmd_non_interactive_switch "$2" "false"
             exit $?
             ;;
+        doctor)
+            doctor_run
+            exit $?
+            ;;
         local)
             # .php-version must hold X.Y (or php@X.Y) for detection to read it back
             if ! [[ "${2:-}" =~ ^(php@)?[0-9]+\.[0-9]+$ ]]; then
@@ -241,6 +245,7 @@ function cmd_parse_arguments {
         printf "    phpswitch use VERSION|auto           use a version in this shell only (needs shell integration)\n"
         printf "    phpswitch global VERSION             switch the global (Homebrew-linked) version\n"
         printf "    phpswitch local VERSION              write .php-version in the current directory\n"
+        printf "    phpswitch doctor                     check your PHP setup (read-only)\n"
         printf "    phpswitch init zsh|bash|fish         print shell integration; add to your rc file:\n"
         printf "                                           eval \"\$(phpswitch init zsh)\"\n"
         printf "    phpswitch --switch=VERSION           switch to version (same as global)\n"
@@ -1010,7 +1015,7 @@ function cmd_show_menu {
             return $?
         elif [ "$selection" = "d" ]; then
             valid_selection=true
-            utils_diagnose_path_issues
+            doctor_run
             # Return to main menu after diagnostics
             printf "\n  Press Enter to continue..."
             read -r
