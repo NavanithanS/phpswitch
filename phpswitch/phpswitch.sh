@@ -27,6 +27,7 @@ if [ -d "$SCRIPT_DIR/lib" ]; then
     source "$SCRIPT_DIR/lib/extensions.sh"
     source "$SCRIPT_DIR/lib/auto-switch.sh"
     source "$SCRIPT_DIR/lib/init.sh"
+    source "$SCRIPT_DIR/lib/completions.sh"
     source "$SCRIPT_DIR/lib/doctor.sh"
     source "$SCRIPT_DIR/lib/commands.sh"
     

@@ -27,7 +27,7 @@ function cmd_parse_arguments {
     # Print header for all interactive/visible commands
     local _silent_flag=false
     case "$1" in
-        --auto-mode|--get-project-version|--version|-v|--help|-h|--quiet|-q|--json|init|__php-dir|use|shell) _silent_flag=true ;;
+        --auto-mode|--get-project-version|--version|-v|--help|-h|--quiet|-q|--json|init|completions|__php-dir|use|shell) _silent_flag=true ;;
     esac
     if [ "$_silent_flag" = "false" ] && [ "$PHPSWITCH_QUIET" != "true" ]; then
         if [ "$USE_COLORS" = "true" ]; then
@@ -44,7 +44,7 @@ function cmd_parse_arguments {
     if [ "$1" != "--version" ] && [ "$1" != "-v" ] &&
        [ "$1" != "--help" ] && [ "$1" != "-h" ] &&
        [ "$1" != "--check-dependencies" ] && [ "$1" != "--fix-permissions" ] &&
-       [ "$1" != "init" ] && [ "$1" != "__php-dir" ] &&
+       [ "$1" != "init" ] && [ "$1" != "completions" ] && [ "$1" != "__php-dir" ] &&
        [ "$1" != "use" ] && [ "$1" != "shell" ]; then
         # Check dependencies
         utils_check_dependencies "$_silent_flag" || {
@@ -61,6 +61,10 @@ function cmd_parse_arguments {
             ;;
         __php-dir)
             init_php_dir "$2"
+            exit $?
+            ;;
+        completions)
+            completions_print "$2"
             exit $?
             ;;
         use|shell)
@@ -246,6 +250,7 @@ function cmd_parse_arguments {
         printf "    phpswitch global VERSION             switch the global (Homebrew-linked) version\n"
         printf "    phpswitch local VERSION              write .php-version in the current directory\n"
         printf "    phpswitch doctor                     check your PHP setup (read-only)\n"
+        printf "    phpswitch completions zsh|bash|fish  print shell completions\n"
         printf "    phpswitch init zsh|bash|fish         print shell integration; add to your rc file:\n"
         printf "                                           eval \"\$(phpswitch init zsh)\"\n"
         printf "    phpswitch --switch=VERSION           switch to version (same as global)\n"
