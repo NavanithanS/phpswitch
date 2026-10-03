@@ -29,6 +29,8 @@ if [ -d "$SCRIPT_DIR/lib" ]; then
     source "$SCRIPT_DIR/lib/init.sh"
     source "$SCRIPT_DIR/lib/completions.sh"
     source "$SCRIPT_DIR/lib/doctor.sh"
+    source "$SCRIPT_DIR/lib/self-manage.sh"
+    source "$SCRIPT_DIR/lib/menu.sh"
     source "$SCRIPT_DIR/lib/commands.sh"
     
     # REL-04: Serialize concurrent auto-switch invocations only.

@@ -36,6 +36,8 @@ load_modules() {
     source "$REPO_ROOT/phpswitch/lib/init.sh"
     source "$REPO_ROOT/phpswitch/lib/completions.sh"
     source "$REPO_ROOT/phpswitch/lib/doctor.sh"
+    source "$REPO_ROOT/phpswitch/lib/self-manage.sh"
+    source "$REPO_ROOT/phpswitch/lib/menu.sh"
     source "$REPO_ROOT/phpswitch/lib/commands.sh"
     HOMEBREW_PREFIX="$FAKE_BREW_PREFIX"
     BACKUP_CONFIG_FILES=true
