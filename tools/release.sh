@@ -64,9 +64,11 @@ CURRENT_VERSION=$(get_current_version)
 echo "ℹ️  Current Version: $CURRENT_VERSION"
 
 read -r -p "Enter new version (e.g., 1.4.4): " NEW_VERSION
+# Tags are always v-prefixed; accept "v1.4.4" input too
+NEW_VERSION="${NEW_VERSION#v}"
 
-if [[ -z "$NEW_VERSION" ]]; then
-    echo "❌ Error: Version cannot be empty."
+if [[ ! "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "❌ Error: Version must look like 1.4.4."
     exit 1
 fi
 
@@ -86,6 +88,12 @@ else
     git push origin HEAD
 fi
 
+# Checksum asset that `phpswitch --update` verifies against (fails closed without it)
+ARTIFACT="$PROJECT_ROOT/php-switcher.sh"
+CHECKSUM_FILE="$PROJECT_ROOT/php-switcher.sh.sha256"
+(cd "$PROJECT_ROOT" && shasum -a 256 php-switcher.sh > "$CHECKSUM_FILE")
+echo "🔐 Artifact SHA256: $(awk '{print $1}' "$CHECKSUM_FILE")"
+
 # 2. Tag and Release on GitHub
 echo "🏷️  Tagging v$NEW_VERSION..."
 if git rev-parse "v$NEW_VERSION" >/dev/null 2>&1; then
@@ -102,7 +110,8 @@ if [ "$HAS_GH" = true ]; then
     else
         # Generate notes or use custom ones
         gh release create "v$NEW_VERSION" \
-            "$PROJECT_ROOT/php-switcher.sh#Standalone Script (php-switcher.sh)" \
+            "$ARTIFACT#Standalone Script (php-switcher.sh)" \
+            "$CHECKSUM_FILE#SHA-256 checksum" \
             --title "v$NEW_VERSION" \
             --generate-notes
         echo "✅ Release created successfully!"
@@ -111,7 +120,8 @@ else
     echo "📦 Manual GitHub Release Required"
     echo "   1. Go to https://github.com/NavanithanS/phpswitch/releases/new"
     echo "   2. Tag: v$NEW_VERSION"
-    echo "   3. Upload: $PROJECT_ROOT/php-switcher.sh"
+    echo "   3. Upload: $ARTIFACT"
+    echo "      and:    $CHECKSUM_FILE  (required by phpswitch --update)"
     echo "   4. Publish the release."
     
     read -r -p "Press Enter once you have created the release..."
