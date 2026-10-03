@@ -1,4 +1,4 @@
-# Shared bats helpers: isolated $HOME, fake brew on PATH, fake Homebrew prefix.
+# Shared bats helpers: isolated $HOME, fake brew/curl/sudo on PATH, fake Homebrew prefix.
 # Usage in a .bats file:  load helpers/common  then call common_setup / common_teardown
 
 REPO_ROOT="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
@@ -12,6 +12,9 @@ common_setup() {
     export FAKE_BREW_PREFIX="$TEST_ROOT/brew"
     export FAKE_BREW_LOG="$TEST_ROOT/brew.log"
     export FAKE_BREW_LIST=""
+    export FAKE_CURL_DIR="$TEST_ROOT/curl"
+    export FAKE_CURL_LOG="$TEST_ROOT/curl.log"
+    mkdir -p "$FAKE_CURL_DIR"
     mkdir -p "$FAKE_BREW_PREFIX/bin" "$FAKE_BREW_PREFIX/opt"
     : > "$FAKE_BREW_LOG"
 }
@@ -49,4 +52,9 @@ fake_php_install() {
 # fake_php_link php@8.1  -> points $prefix/bin/php at that formula
 fake_php_link() {
     ln -sfn "../opt/$1/bin/php" "$FAKE_BREW_PREFIX/bin/php"
+}
+
+# fake_url <url> <file-with-content>  -> fake curl serves that content for the URL
+fake_url() {
+    cp "$2" "$FAKE_CURL_DIR/$(printf '%s' "$1" | tr -c '[:alnum:]' '_')"
 }

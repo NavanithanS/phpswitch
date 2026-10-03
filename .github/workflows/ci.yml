@@ -24,7 +24,9 @@ jobs:
             phpswitch/build.sh \
             phpswitch/phpswitch.sh \
             tools/release.sh \
-            tests/helpers/bin/brew
+            tests/helpers/bin/brew \
+            tests/helpers/bin/curl \
+            tests/helpers/bin/sudo
 
       - name: Built artifact is up to date
         run: |

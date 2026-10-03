@@ -3396,7 +3396,7 @@ function cmd_parse_arguments {
         exit 0
     elif [ "$1" = "--update" ]; then
         cmd_update_self
-        exit 0
+        exit $?
     elif [ "$1" = "--version" ] || [ "$1" = "-v" ]; then
         printf "PHPSwitch version %s\n" "$PHPSWITCH_VERSION"
         exit 0
@@ -3778,106 +3778,149 @@ function cmd_uninstall_command {
     fi
 }
 
-# Function to update self from GitHub
+# Function to resolve a path through any chain of symlinks
+function cmd_resolve_script_path {
+    local path="$1"
+    local target hops=0
+    # Cap hops so a symlink cycle cannot hang the update
+    while [ -L "$path" ] && [ "$hops" -lt 40 ]; do
+        hops=$((hops + 1))
+        target=$(readlink "$path")
+        case "$target" in
+            /*) path="$target" ;;
+            # Relative targets (Homebrew uses ../Cellar/...) are normalized via cd
+            *) path="$(cd "$(dirname "$path")/$(dirname "$target")" 2>/dev/null && pwd)/$(basename "$target")" ;;
+        esac
+    done
+    printf '%s\n' "$path"
+}
+
+# Function to update self from the latest GitHub release.
+# Fails closed: the download must match the release's published SHA-256.
 function cmd_update_self {
+    local repo="NavanithanS/phpswitch"
+
+    # Find the current script's location
+    local script_path
+    script_path=$(command -v phpswitch 2>/dev/null || echo "$0")
+
+    # Homebrew-managed installs must be upgraded through Homebrew
+    local resolved_path
+    resolved_path=$(cmd_resolve_script_path "$script_path")
+    if [ -n "$HOMEBREW_PREFIX" ] && [[ "$resolved_path" == "$HOMEBREW_PREFIX/Cellar/"* ]]; then
+        utils_show_status "info" "PHPSwitch is managed by Homebrew"
+        printf "  Update it with:\n\n    brew upgrade phpswitch\n\n"
+        return 0
+    fi
+
+    if ! command -v shasum >/dev/null 2>&1; then
+        utils_show_status "error" "shasum is required to verify updates"
+        return 1
+    fi
+
     utils_show_status "info" "Checking for updates..."
-    
-    # Create a temporary directory
+
     local tmp_dir
     tmp_dir=$(mktemp -d 2>/dev/null) || { utils_show_status "error" "Failed to create temp directory for update"; return 1; }
-    
-    # Try to download the latest version from GitHub
-    if curl -s -L "https://raw.githubusercontent.com/NavanithanS/phpswitch/master/php-switcher.sh" -o "$tmp_dir/php-switcher.sh"; then
-        # Check if the download was successful
-        if [ -s "$tmp_dir/php-switcher.sh" ]; then
-            # Get the current version from the loaded variable
-            local current_version="$PHPSWITCH_VERSION"
 
-            # Get the downloaded version
-            local new_version
-            new_version=$(grep "^PHPSWITCH_VERSION=" "$tmp_dir/php-switcher.sh" | cut -d'"' -f2 | tr -d "'")
-            
-            # Validate new_version is semver (e.g. 1.4.5) before trusting it
-            if ! [[ "$new_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                utils_show_status "error" "Could not determine downloaded version; update aborted"
-                rm -rf "$tmp_dir"
-                return 1
-            fi
-            
-            # SEC-01: Verify checksum before executing/installing
-            # Note: For production use, this should fetch a signed checksum file.
-            # Using a placeholder implementation that must be replaced before release.
-            local EXPECTED_SHA256="TODO_CHECKSUM_MUST_BE_HARDCODED_DURING_RELEASE"
-            local actual_sha256
-            if command -v shasum >/dev/null; then
-                actual_sha256=$(shasum -a 256 "$tmp_dir/php-switcher.sh" | awk '{print $1}')
-            else
-                utils_show_status "warning" "shasum not found, skipping integrity check (unsafe)"
-                actual_sha256="$EXPECTED_SHA256" # Bypass if no shasum
-            fi
-            
-            if [ "$EXPECTED_SHA256" != "TODO_CHECKSUM_MUST_BE_HARDCODED_DURING_RELEASE" ] && [ "$actual_sha256" != "$EXPECTED_SHA256" ]; then
-                utils_show_status "error" "Checksum verification failed! File may be compromised."
-                printf "  Expected: %s\n" "$EXPECTED_SHA256"
-                printf "  Actual:   %s\n" "$actual_sha256"
-                rm -rf "$tmp_dir"
-                return 1
-            fi
-            
-            if [ -n "$new_version" ] && [ -n "$current_version" ] && [ "$new_version" != "$current_version" ]; then
-                utils_show_status "info" "New version available: $new_version (current: $current_version)"
-                printf "  Update to %s? (y/n) " "$new_version"
+    # Look up the latest release
+    if ! curl -fsSL "https://api.github.com/repos/$repo/releases/latest" -o "$tmp_dir/release.json"; then
+        utils_show_status "error" "Failed to connect to GitHub. Check your internet connection."
+        rm -rf "$tmp_dir"
+        return 1
+    fi
 
-                if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
-                    # Find the current script's location
-                    local script_path
-                    script_path=$(command -v phpswitch 2>/dev/null || echo "$0")
-                    
-                    # Create backup
-                    local backup_path
-                    backup_path="${script_path}.bak.$(date +%Y%m%d%H%M%S)"
-                    utils_show_status "info" "Creating backup at $backup_path..."
-                    cp "$script_path" "$backup_path" || { utils_show_status "error" "Failed to create backup"; rm -rf "$tmp_dir"; return 1; }
-                    
-                    # Install the new version
-                    if [ -f "/usr/local/bin/phpswitch" ] || [ -f "$HOMEBREW_PREFIX/bin/phpswitch" ]; then
-                        # Update the system command
-                        utils_show_status "info" "Updating system command..."
-                        chmod +x "$tmp_dir/php-switcher.sh"
-                        
-                        # Copy to all known installation locations
-                        if [ -f "/usr/local/bin/phpswitch" ]; then
-                            sudo cp "$tmp_dir/php-switcher.sh" "/usr/local/bin/phpswitch" || { utils_show_status "error" "Failed to update. Try with sudo"; rm -rf "$tmp_dir"; return 1; }
-                        fi
-                        
-                        if [ -f "$HOMEBREW_PREFIX/bin/phpswitch" ]; then
-                            sudo cp "$tmp_dir/php-switcher.sh" "$HOMEBREW_PREFIX/bin/phpswitch" || { utils_show_status "error" "Failed to update. Try with sudo"; rm -rf "$tmp_dir"; return 1; }
-                        fi
-                    else
-                        # Just update the current script
-                        chmod +x "$tmp_dir/php-switcher.sh"
-                        sudo cp "$tmp_dir/php-switcher.sh" "$script_path" || { utils_show_status "error" "Failed to update. Try with sudo"; rm -rf "$tmp_dir"; return 1; }
-                    fi
-                    
-                    utils_show_status "success" "Updated to version $new_version"
-                    printf "  Please restart phpswitch to use the new version.\n"
-                    
-                    # Clean up
-                    rm -rf "$tmp_dir"
-                    exit 0
-                else
-                    utils_show_status "info" "Update cancelled"
-                fi
-            else
-                utils_show_status "success" "You are already using the latest version: $current_version"
+    local tag
+    tag=$(grep -o '"tag_name": *"[^"]*"' "$tmp_dir/release.json" | head -n 1 | sed -E 's/.*"([^"]*)"$/\1/')
+    if ! [[ "$tag" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        utils_show_status "error" "Could not determine the latest release version; update aborted"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    local new_version="${tag#v}"
+    local current_version="$PHPSWITCH_VERSION"
+
+    if utils_compare_versions "$current_version" "$new_version"; then
+        utils_show_status "success" "You are already using the latest version: $current_version"
+        rm -rf "$tmp_dir"
+        return 0
+    fi
+
+    utils_show_status "info" "New version available: $new_version (current: $current_version)"
+
+    # Download the release asset and its checksum
+    local base_url="https://github.com/$repo/releases/download/$tag"
+    if ! curl -fsSL "$base_url/php-switcher.sh" -o "$tmp_dir/php-switcher.sh" || [ ! -s "$tmp_dir/php-switcher.sh" ]; then
+        utils_show_status "error" "Failed to download php-switcher.sh from release $tag"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+    if ! curl -fsSL "$base_url/php-switcher.sh.sha256" -o "$tmp_dir/php-switcher.sh.sha256"; then
+        utils_show_status "error" "Release $tag does not publish a checksum; refusing to update"
+        printf "  Download it manually from https://github.com/%s/releases\n" "$repo"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    # SEC-01: Verify the download against the published checksum
+    local expected_sha256 actual_sha256
+    expected_sha256=$(awk '{print $1; exit}' "$tmp_dir/php-switcher.sh.sha256")
+    actual_sha256=$(shasum -a 256 "$tmp_dir/php-switcher.sh" | awk '{print $1}')
+    if ! [[ "$expected_sha256" =~ ^[0-9a-f]{64}$ ]] || [ "$actual_sha256" != "$expected_sha256" ]; then
+        utils_show_status "error" "Checksum verification failed! File may be compromised."
+        printf "  Expected: %s\n" "$expected_sha256"
+        printf "  Actual:   %s\n" "$actual_sha256"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    # The verified file must be the version the release claims to be
+    local downloaded_version
+    downloaded_version=$(grep "^PHPSWITCH_VERSION=" "$tmp_dir/php-switcher.sh" | cut -d'"' -f2)
+    if [ "$downloaded_version" != "$new_version" ]; then
+        utils_show_status "error" "Downloaded script reports version '$downloaded_version', expected $new_version; update aborted"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    printf "  Update to %s? (y/n) " "$new_version"
+    if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
+        # Create backup
+        local backup_path
+        backup_path="${script_path}.bak.$(date +%Y%m%d%H%M%S)"
+        utils_show_status "info" "Creating backup at $backup_path..."
+        cp "$script_path" "$backup_path" || { utils_show_status "error" "Failed to create backup"; rm -rf "$tmp_dir"; return 1; }
+
+        # Install the new version
+        chmod +x "$tmp_dir/php-switcher.sh"
+        if [ -f "/usr/local/bin/phpswitch" ] || [ -f "$HOMEBREW_PREFIX/bin/phpswitch" ]; then
+            # Update the system command
+            utils_show_status "info" "Updating system command..."
+
+            # Copy to all known installation locations
+            if [ -f "/usr/local/bin/phpswitch" ]; then
+                sudo cp "$tmp_dir/php-switcher.sh" "/usr/local/bin/phpswitch" || { utils_show_status "error" "Failed to update. Try with sudo"; rm -rf "$tmp_dir"; return 1; }
+            fi
+
+            if [ -f "$HOMEBREW_PREFIX/bin/phpswitch" ]; then
+                sudo cp "$tmp_dir/php-switcher.sh" "$HOMEBREW_PREFIX/bin/phpswitch" || { utils_show_status "error" "Failed to update. Try with sudo"; rm -rf "$tmp_dir"; return 1; }
             fi
         else
-            utils_show_status "error" "Failed to download the latest version"
+            # Just update the current script
+            sudo cp "$tmp_dir/php-switcher.sh" "$script_path" || { utils_show_status "error" "Failed to update. Try with sudo"; rm -rf "$tmp_dir"; return 1; }
         fi
+
+        utils_show_status "success" "Updated to version $new_version"
+        printf "  Please restart phpswitch to use the new version.\n"
+
+        # Clean up
+        rm -rf "$tmp_dir"
+        exit 0
     else
-        utils_show_status "error" "Failed to connect to GitHub. Check your internet connection."
+        utils_show_status "info" "Update cancelled"
     fi
-    
+
     # Clean up
     rm -rf "$tmp_dir"
 }
