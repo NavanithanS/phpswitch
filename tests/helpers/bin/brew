@@ -47,6 +47,8 @@ case "$1" in
         fi
         ;;
     link)
+        # FAKE_BREW_LINK_FAIL=1 simulates `brew link` failing
+        [ "${FAKE_BREW_LINK_FAIL:-}" = "1" ] && exit 1
         formula=$(formula_arg "${@:2}")
         mkdir -p "$prefix/bin"
         ln -sfn "../opt/$formula/bin/php" "$prefix/bin/php"

@@ -230,7 +230,13 @@ function utils_validate_yes_no {
     fi
 
     while true; do
-        read -r response
+        # EOF (no terminal / closed stdin): never loop; fall back to the
+        # default, or "n" so nothing is done without an explicit yes
+        if ! read -r response && [ -z "$response" ]; then
+            echo "${default:-n}"
+            return 0
+        fi
+
         
         # If empty and default provided, use default
         if [ -z "$response" ] && [ -n "$default" ]; then
@@ -394,33 +400,9 @@ function utils_ensure_cache_writable {
         return 0
     fi
     
-    # Strategy 2: sudo chmod
-    utils_show_status "info" "Trying with sudo..."
-    sudo chmod u+w "$cache_dir" 2>/dev/null
-    if [ -w "$cache_dir" ]; then
-        utils_show_status "success" "Permissions fixed with sudo"
-        return 0
-    fi
-    
-    # Strategy 3: chown
-    local username
-    username="$(id -un)"
-    if utils_validate_username "$username"; then
-        sudo chown "$username" "$cache_dir" 2>/dev/null
-        if [ -w "$cache_dir" ]; then
-            utils_show_status "success" "Permissions fixed by changing ownership"
-            return 0
-        fi
-    fi
-    
-    # Strategy 4: Recreate directory
-    utils_show_status "info" "Trying to recreate the cache directory..."
-    sudo rm -rf "$cache_dir" 2>/dev/null
-    mkdir -p "$cache_dir" 2>/dev/null
-    if [ -d "$cache_dir" ] && [ -w "$cache_dir" ]; then
-        utils_show_status "success" "Cache directory recreated successfully"
-        return 0
-    fi
+    # Never escalate automatically; tell the user how to fix ownership
+    utils_show_status "warning" "$cache_dir is not writable (it may be owned by root)"
+    printf "  To fix it yourself, run:\n    sudo chown -R %s \"%s\"\n" "$(id -un)" "$cache_dir"
     
     # Strategy 5: Alternative directory
     local alt_cache="$HOME/.phpswitch_cache"
@@ -439,6 +421,19 @@ function utils_ensure_cache_writable {
     utils_show_status "error" "All attempts to fix cache permissions failed"
     echo "PHPSwitch will fall back to using temporary directories for this session."
     return 1
+}
+
+# Run a command for an explicit user request (install/uninstall/update),
+# escalating with sudo only when the target directory isn't writable.
+function utils_run_for_dir {
+    local dir="$1"
+    shift
+    if [ -w "$dir" ]; then
+        "$@"
+    else
+        utils_show_status "info" "$dir is not writable; using sudo"
+        sudo "$@"
+    fi
 }
 
 # Function to compare semantic versions (returns true if version1 >= version2)

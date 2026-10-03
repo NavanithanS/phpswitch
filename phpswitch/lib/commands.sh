@@ -273,6 +273,19 @@ function cmd_parse_arguments {
         printf "    phpswitch --help, -h                 show this help\n\n"
         exit 0
     else
+        # Unknown arguments used to fall through to the menu
+        if [ -n "${1:-}" ]; then
+            utils_show_status "error" "Unknown command or option: $1"
+            printf "  Run 'phpswitch --help' for usage.\n"
+            exit 2
+        fi
+        # The menu needs a terminal; without one it would wait forever
+        if [ ! -t 0 ]; then
+            utils_show_status "error" "The interactive menu needs a terminal"
+            printf "  Use a command instead, e.g. 'phpswitch global 8.3'. Run 'phpswitch --help' for usage.\n"
+            exit 1
+        fi
+
         # No arguments or debug mode only - show the interactive menu
         current_version=$(core_get_current_php_version)
 
@@ -550,15 +563,17 @@ function cmd_install_as_command {
             destination=$alt_destination
         else
             utils_show_status "info" "Creating /usr/local/bin directory..."
-            sudo mkdir -p "/usr/local/bin"
+            utils_run_for_dir "/usr/local" mkdir -p "/usr/local/bin"
         fi
     fi
     
     utils_show_status "info" "Installing phpswitch command to $destination..."
     
     # Copy this script to the destination
-    if sudo cp "$0" "$destination"; then
-        sudo chmod +x "$destination"
+    local dest_dir
+    dest_dir=$(dirname "$destination")
+    if utils_run_for_dir "$dest_dir" cp "$0" "$destination"; then
+        utils_run_for_dir "$dest_dir" chmod +x "$destination"
         utils_show_status "success" "Installation successful! You can now run 'phpswitch' from anywhere"
     else
         utils_show_status "error" "Failed to install. Try running with sudo"
@@ -594,7 +609,7 @@ function cmd_uninstall_command {
     if [ "$(utils_validate_yes_no "" "n")" = "y" ]; then
         for location in "${installed_locations[@]}"; do
             utils_show_status "info" "Removing $location..."
-            sudo rm "$location"
+            utils_run_for_dir "$(dirname "$location")" rm "$location"
         done
         
         # Ask about config file
@@ -744,15 +759,15 @@ function cmd_update_self {
 
             # Copy to all known installation locations
             if [ -f "/usr/local/bin/phpswitch" ]; then
-                sudo cp "$tmp_dir/php-switcher.sh" "/usr/local/bin/phpswitch" || { utils_show_status "error" "Failed to update. Try with sudo"; rm -rf "$tmp_dir"; return 1; }
+                utils_run_for_dir "/usr/local/bin" cp "$tmp_dir/php-switcher.sh" "/usr/local/bin/phpswitch" || { utils_show_status "error" "Failed to update. Try with sudo"; rm -rf "$tmp_dir"; return 1; }
             fi
 
             if [ -f "$HOMEBREW_PREFIX/bin/phpswitch" ]; then
-                sudo cp "$tmp_dir/php-switcher.sh" "$HOMEBREW_PREFIX/bin/phpswitch" || { utils_show_status "error" "Failed to update. Try with sudo"; rm -rf "$tmp_dir"; return 1; }
+                utils_run_for_dir "$HOMEBREW_PREFIX/bin" cp "$tmp_dir/php-switcher.sh" "$HOMEBREW_PREFIX/bin/phpswitch" || { utils_show_status "error" "Failed to update. Try with sudo"; rm -rf "$tmp_dir"; return 1; }
             fi
         else
             # Just update the current script
-            sudo cp "$tmp_dir/php-switcher.sh" "$script_path" || { utils_show_status "error" "Failed to update. Try with sudo"; rm -rf "$tmp_dir"; return 1; }
+            utils_run_for_dir "$(dirname "$script_path")" cp "$tmp_dir/php-switcher.sh" "$script_path" || { utils_show_status "error" "Failed to update. Try with sudo"; rm -rf "$tmp_dir"; return 1; }
         fi
 
         utils_show_status "success" "Updated to version $new_version"

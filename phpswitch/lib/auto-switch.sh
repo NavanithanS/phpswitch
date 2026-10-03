@@ -218,17 +218,8 @@ function auto_clear_directory_cache {
             rm -f "$cache_file" 2>/dev/null
             utils_show_status "success" "Directory cache cleared"
         else
-            # Try with sudo if direct removal fails
             utils_show_status "warning" "No write permission for $cache_file"
-            printf "  Try with sudo? (y/n) "
-            if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
-                sudo rm -f "$cache_file" 2>/dev/null
-                if [ ! -f "$cache_file" ]; then
-                    utils_show_status "success" "Directory cache cleared with sudo"
-                else
-                    utils_show_status "error" "Failed to clear directory cache with sudo"
-                fi
-            fi
+            printf "  Remove it yourself with:\n    sudo rm -f \"%s\"\n" "$cache_file"
         fi
     else
         utils_show_status "info" "No directory cache found at $cache_file"

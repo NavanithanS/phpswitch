@@ -696,7 +696,13 @@ function utils_validate_yes_no {
     fi
 
     while true; do
-        read -r response
+        # EOF (no terminal / closed stdin): never loop; fall back to the
+        # default, or "n" so nothing is done without an explicit yes
+        if ! read -r response && [ -z "$response" ]; then
+            echo "${default:-n}"
+            return 0
+        fi
+
         
         # If empty and default provided, use default
         if [ -z "$response" ] && [ -n "$default" ]; then
@@ -860,33 +866,9 @@ function utils_ensure_cache_writable {
         return 0
     fi
     
-    # Strategy 2: sudo chmod
-    utils_show_status "info" "Trying with sudo..."
-    sudo chmod u+w "$cache_dir" 2>/dev/null
-    if [ -w "$cache_dir" ]; then
-        utils_show_status "success" "Permissions fixed with sudo"
-        return 0
-    fi
-    
-    # Strategy 3: chown
-    local username
-    username="$(id -un)"
-    if utils_validate_username "$username"; then
-        sudo chown "$username" "$cache_dir" 2>/dev/null
-        if [ -w "$cache_dir" ]; then
-            utils_show_status "success" "Permissions fixed by changing ownership"
-            return 0
-        fi
-    fi
-    
-    # Strategy 4: Recreate directory
-    utils_show_status "info" "Trying to recreate the cache directory..."
-    sudo rm -rf "$cache_dir" 2>/dev/null
-    mkdir -p "$cache_dir" 2>/dev/null
-    if [ -d "$cache_dir" ] && [ -w "$cache_dir" ]; then
-        utils_show_status "success" "Cache directory recreated successfully"
-        return 0
-    fi
+    # Never escalate automatically; tell the user how to fix ownership
+    utils_show_status "warning" "$cache_dir is not writable (it may be owned by root)"
+    printf "  To fix it yourself, run:\n    sudo chown -R %s \"%s\"\n" "$(id -un)" "$cache_dir"
     
     # Strategy 5: Alternative directory
     local alt_cache="$HOME/.phpswitch_cache"
@@ -905,6 +887,19 @@ function utils_ensure_cache_writable {
     utils_show_status "error" "All attempts to fix cache permissions failed"
     echo "PHPSwitch will fall back to using temporary directories for this session."
     return 1
+}
+
+# Run a command for an explicit user request (install/uninstall/update),
+# escalating with sudo only when the target directory isn't writable.
+function utils_run_for_dir {
+    local dir="$1"
+    shift
+    if [ -w "$dir" ]; then
+        "$@"
+    else
+        utils_show_status "info" "$dir is not writable; using sudo"
+        sudo "$@"
+    fi
 }
 
 # Function to compare semantic versions (returns true if version1 >= version2)
@@ -1885,8 +1880,12 @@ function version_uninstall_php {
                 utils_show_status "warning" "Cannot determine config directory for '$version'; skipping"
             elif [ -d "$HOMEBREW_PREFIX/etc/php/$php_version" ]; then
                 utils_show_status "info" "Removing configuration files..."
-                sudo rm -rf "$HOMEBREW_PREFIX/etc/php/$php_version"
-                utils_show_status "success" "Configuration files removed"
+                if rm -rf "$HOMEBREW_PREFIX/etc/php/$php_version"; then
+                    utils_show_status "success" "Configuration files removed"
+                else
+                    utils_show_status "error" "Could not remove $HOMEBREW_PREFIX/etc/php/$php_version"
+                    printf "  If it is owned by root, run:\n    sudo rm -rf \"%s\"\n" "$HOMEBREW_PREFIX/etc/php/$php_version"
+                fi
             else
                 utils_show_status "warning" "Configuration directory not found at $HOMEBREW_PREFIX/etc/php/$php_version"
             fi
@@ -2031,13 +2030,20 @@ function version_switch_php {
             fi
             
             if [ -d "$php_bin_path" ]; then
+                local link_failed=false
                 for file in "$php_bin_path"/*; do
                     if [ -f "$file" ] && [ -x "$file" ]; then
                         local filename
                         filename=$(basename "$file")
-                        sudo ln -sf "$file" "$HOMEBREW_PREFIX/bin/$filename" 2>/dev/null
+                        ln -sf "$file" "$HOMEBREW_PREFIX/bin/$filename" 2>/dev/null || link_failed=true
                     fi
                 done
+                if [ "$link_failed" = "true" ]; then
+                    utils_show_status "error" "Could not link into $HOMEBREW_PREFIX/bin (it may contain root-owned files)"
+                    printf "  Fix ownership with:\n    sudo chown -R %s \"%s/bin\"\n" "$(id -un)" "$HOMEBREW_PREFIX"
+                    printf "  then run: brew link --overwrite %s\n" "$brew_version"
+                    exit 1
+                fi
                 utils_show_status "success" "Manual linking completed"
             else
                 utils_show_status "error" "Could not find PHP installation directory"
@@ -2151,43 +2157,44 @@ function fpm_cleanup_service {
     
     # Find and remove LaunchAgent/LaunchDaemon files
     local launch_agent="$HOME/Library/LaunchAgents/homebrew.mxcl.$service_name.plist"
-    local launch_daemon="/Library/LaunchDaemons/homebrew.mxcl.$service_name.plist"
+    local launch_daemon="${PHPSWITCH_LAUNCH_DAEMONS_DIR:-/Library/LaunchDaemons}/homebrew.mxcl.$service_name.plist"
     
     if [ -f "$launch_agent" ]; then
         utils_show_status "info" "Removing LaunchAgent file: $launch_agent"
         rm -f "$launch_agent" 2>/dev/null
     fi
     
-    if [ -f "$launch_daemon" ]; then
-        utils_show_status "info" "Removing LaunchDaemon file (requires sudo): $launch_daemon"
-        sudo rm -f "$launch_daemon" 2>/dev/null
-    fi
-    
-    # Reset permissions if needed
+    # Root-owned leftovers (from `sudo brew services`) need administrator
+    # rights; show the exact commands and only run them with explicit consent
     local cellar_path="$HOMEBREW_PREFIX/Cellar/$service_name"
     local opt_path="$HOMEBREW_PREFIX/opt/$service_name"
-    
-    if [ -d "$cellar_path" ]; then
-        utils_show_status "info" "Resetting permissions for: $cellar_path"
-        # Get secure username and validate it
-        local username
-        username="$(id -un)"
-        if utils_validate_username "$username"; then
-            sudo chown -R "$username" "$cellar_path" 2>/dev/null
-        else
-            utils_show_status "error" "Invalid username detected, skipping permission reset"
+    local username
+    username="$(id -un)"
+    local -a root_cmds=()
+    if [ -f "$launch_daemon" ]; then
+        root_cmds+=("rm -f \"$launch_daemon\"")
+    fi
+    if utils_validate_username "$username"; then
+        if [ -d "$cellar_path" ] && [ -n "$(find "$cellar_path" -maxdepth 3 -user root -print -quit 2>/dev/null)" ]; then
+            root_cmds+=("chown -R \"$username\" \"$cellar_path\"")
+        fi
+        if [ -d "$opt_path" ] && [ -n "$(find "$opt_path/" -maxdepth 3 -user root -print -quit 2>/dev/null)" ]; then
+            root_cmds+=("chown -R \"$username\" \"$opt_path\"")
         fi
     fi
-    
-    if [ -d "$opt_path" ]; then
-        utils_show_status "info" "Resetting permissions for: $opt_path"
-        # Get secure username and validate it
-        local username
-        username="$(id -un)"
-        if utils_validate_username "$username"; then
-            sudo chown -R "$username" "$opt_path" 2>/dev/null
-        else
-            utils_show_status "error" "Invalid username detected, skipping permission reset"
+    if [ ${#root_cmds[@]} -gt 0 ]; then
+        utils_show_status "warning" "These root-owned leftovers need administrator rights to fix:"
+        local root_cmd
+        for root_cmd in "${root_cmds[@]}"; do
+            printf "    sudo %s\n" "$root_cmd"
+        done
+        printf "  Run them now with sudo? (y/N) "
+        if [ "$(utils_validate_yes_no "" "n")" = "y" ]; then
+            [ -f "$launch_daemon" ] && sudo rm -f "$launch_daemon"
+            if utils_validate_username "$username"; then
+                [ -d "$cellar_path" ] && sudo chown -R "$username" "$cellar_path"
+                [ -d "$opt_path" ] && sudo chown -R "$username" "$opt_path/"
+            fi
         fi
     fi
     
@@ -2251,20 +2258,9 @@ function fpm_restart {
                 if echo "$cleanup_output" | grep -q "Successfully"; then
                     utils_show_status "success" "PHP-FPM service restarted successfully after cleanup"
                 else
-                    printf "  Try with sudo instead? (y/n) "
-                    if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
-                        utils_show_status "info" "Trying with sudo..."
-                        local sudo_output
-                        sudo_output=$(sudo brew services restart "$service_name" 2>&1)
-                        if echo "$sudo_output" | grep -q "Successfully"; then
-                            utils_show_status "success" "PHP-FPM service restarted successfully with sudo"
-                            utils_show_status "warning" "Running with sudo changes file ownership. You may need to run cleanup later."
-                        else
-                            utils_show_status "error" "Failed to restart service with sudo: $sudo_output"
-                            printf "  You may need to restart manually with:\n"
-                            printf "    sudo brew services restart %s\n" "$service_name"
-                        fi
-                    fi
+                    utils_show_status "error" "Failed to restart PHP-FPM: $cleanup_output"
+                    printf "  Check the service with: brew services info %s\n" "$service_name"
+                    printf "  Avoid 'sudo brew services': it makes Homebrew files root-owned.\n"
                 fi
             elif echo "$restart_output" | grep -q "already started"; then
                 utils_show_status "warning" "Service reports as already started. Forcing stop and restart..."
@@ -2323,11 +2319,9 @@ function fpm_restart {
                     printf "    brew reinstall %s\n" "$service_name"
                 fi
             else
-                printf "  Try with sudo? (y/n) "
-                if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
-                    utils_show_status "info" "Trying with sudo..."
-                    sudo brew services start "$service_name"
-                fi
+                utils_show_status "error" "Failed to start PHP-FPM: $start_output"
+                printf "  Check the service with: brew services info %s\n" "$service_name"
+                printf "  Avoid 'sudo brew services': it makes Homebrew files root-owned.\n"
             fi
         fi
     fi
@@ -2470,13 +2464,21 @@ function ext_manage_extensions {
                 elif [ "$ext_action" = "2" ]; then
                     utils_show_status "info" "Disabling $ext_name..."
                     if [ -f "$ini_dir/conf.d/ext-$ext_name.ini" ]; then
-                        sudo mv "$ini_dir/conf.d/ext-$ext_name.ini" "$ini_dir/conf.d/ext-$ext_name.ini.disabled"
-                        utils_show_status "success" "Extension $ext_name disabled"
-                        fpm_restart "$php_version"
+                        if mv "$ini_dir/conf.d/ext-$ext_name.ini" "$ini_dir/conf.d/ext-$ext_name.ini.disabled"; then
+                            utils_show_status "success" "Extension $ext_name disabled"
+                            fpm_restart "$php_version"
+                        else
+                            utils_show_status "error" "Could not rename $ini_dir/conf.d/ext-$ext_name.ini"
+                            printf "  If it is owned by root, run:\n    sudo mv \"%s\" \"%s.disabled\"\n" "$ini_dir/conf.d/ext-$ext_name.ini" "$ini_dir/conf.d/ext-$ext_name.ini"
+                        fi
                     elif [ -f "$ini_dir/conf.d/$ext_name.ini" ]; then
-                        sudo mv "$ini_dir/conf.d/$ext_name.ini" "$ini_dir/conf.d/$ext_name.ini.disabled"
-                        utils_show_status "success" "Extension $ext_name disabled"
-                        fpm_restart "$php_version"
+                        if mv "$ini_dir/conf.d/$ext_name.ini" "$ini_dir/conf.d/$ext_name.ini.disabled"; then
+                            utils_show_status "success" "Extension $ext_name disabled"
+                            fpm_restart "$php_version"
+                        else
+                            utils_show_status "error" "Could not rename $ini_dir/conf.d/$ext_name.ini"
+                            printf "  If it is owned by root, run:\n    sudo mv \"%s\" \"%s.disabled\"\n" "$ini_dir/conf.d/$ext_name.ini" "$ini_dir/conf.d/$ext_name.ini"
+                        fi
                     else
                         utils_show_status "error" "Could not find configuration file for $ext_name"
                     fi
@@ -2747,17 +2749,8 @@ function auto_clear_directory_cache {
             rm -f "$cache_file" 2>/dev/null
             utils_show_status "success" "Directory cache cleared"
         else
-            # Try with sudo if direct removal fails
             utils_show_status "warning" "No write permission for $cache_file"
-            printf "  Try with sudo? (y/n) "
-            if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
-                sudo rm -f "$cache_file" 2>/dev/null
-                if [ ! -f "$cache_file" ]; then
-                    utils_show_status "success" "Directory cache cleared with sudo"
-                else
-                    utils_show_status "error" "Failed to clear directory cache with sudo"
-                fi
-            fi
+            printf "  Remove it yourself with:\n    sudo rm -f \"%s\"\n" "$cache_file"
         fi
     else
         utils_show_status "info" "No directory cache found at $cache_file"
@@ -3610,6 +3603,19 @@ function cmd_parse_arguments {
         printf "    phpswitch --help, -h                 show this help\n\n"
         exit 0
     else
+        # Unknown arguments used to fall through to the menu
+        if [ -n "${1:-}" ]; then
+            utils_show_status "error" "Unknown command or option: $1"
+            printf "  Run 'phpswitch --help' for usage.\n"
+            exit 2
+        fi
+        # The menu needs a terminal; without one it would wait forever
+        if [ ! -t 0 ]; then
+            utils_show_status "error" "The interactive menu needs a terminal"
+            printf "  Use a command instead, e.g. 'phpswitch global 8.3'. Run 'phpswitch --help' for usage.\n"
+            exit 1
+        fi
+
         # No arguments or debug mode only - show the interactive menu
         current_version=$(core_get_current_php_version)
 
@@ -3887,15 +3893,17 @@ function cmd_install_as_command {
             destination=$alt_destination
         else
             utils_show_status "info" "Creating /usr/local/bin directory..."
-            sudo mkdir -p "/usr/local/bin"
+            utils_run_for_dir "/usr/local" mkdir -p "/usr/local/bin"
         fi
     fi
     
     utils_show_status "info" "Installing phpswitch command to $destination..."
     
     # Copy this script to the destination
-    if sudo cp "$0" "$destination"; then
-        sudo chmod +x "$destination"
+    local dest_dir
+    dest_dir=$(dirname "$destination")
+    if utils_run_for_dir "$dest_dir" cp "$0" "$destination"; then
+        utils_run_for_dir "$dest_dir" chmod +x "$destination"
         utils_show_status "success" "Installation successful! You can now run 'phpswitch' from anywhere"
     else
         utils_show_status "error" "Failed to install. Try running with sudo"
@@ -3931,7 +3939,7 @@ function cmd_uninstall_command {
     if [ "$(utils_validate_yes_no "" "n")" = "y" ]; then
         for location in "${installed_locations[@]}"; do
             utils_show_status "info" "Removing $location..."
-            sudo rm "$location"
+            utils_run_for_dir "$(dirname "$location")" rm "$location"
         done
         
         # Ask about config file
@@ -4081,15 +4089,15 @@ function cmd_update_self {
 
             # Copy to all known installation locations
             if [ -f "/usr/local/bin/phpswitch" ]; then
-                sudo cp "$tmp_dir/php-switcher.sh" "/usr/local/bin/phpswitch" || { utils_show_status "error" "Failed to update. Try with sudo"; rm -rf "$tmp_dir"; return 1; }
+                utils_run_for_dir "/usr/local/bin" cp "$tmp_dir/php-switcher.sh" "/usr/local/bin/phpswitch" || { utils_show_status "error" "Failed to update. Try with sudo"; rm -rf "$tmp_dir"; return 1; }
             fi
 
             if [ -f "$HOMEBREW_PREFIX/bin/phpswitch" ]; then
-                sudo cp "$tmp_dir/php-switcher.sh" "$HOMEBREW_PREFIX/bin/phpswitch" || { utils_show_status "error" "Failed to update. Try with sudo"; rm -rf "$tmp_dir"; return 1; }
+                utils_run_for_dir "$HOMEBREW_PREFIX/bin" cp "$tmp_dir/php-switcher.sh" "$HOMEBREW_PREFIX/bin/phpswitch" || { utils_show_status "error" "Failed to update. Try with sudo"; rm -rf "$tmp_dir"; return 1; }
             fi
         else
             # Just update the current script
-            sudo cp "$tmp_dir/php-switcher.sh" "$script_path" || { utils_show_status "error" "Failed to update. Try with sudo"; rm -rf "$tmp_dir"; return 1; }
+            utils_run_for_dir "$(dirname "$script_path")" cp "$tmp_dir/php-switcher.sh" "$script_path" || { utils_show_status "error" "Failed to update. Try with sudo"; rm -rf "$tmp_dir"; return 1; }
         fi
 
         utils_show_status "success" "Updated to version $new_version"

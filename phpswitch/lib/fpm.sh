@@ -45,43 +45,44 @@ function fpm_cleanup_service {
     
     # Find and remove LaunchAgent/LaunchDaemon files
     local launch_agent="$HOME/Library/LaunchAgents/homebrew.mxcl.$service_name.plist"
-    local launch_daemon="/Library/LaunchDaemons/homebrew.mxcl.$service_name.plist"
+    local launch_daemon="${PHPSWITCH_LAUNCH_DAEMONS_DIR:-/Library/LaunchDaemons}/homebrew.mxcl.$service_name.plist"
     
     if [ -f "$launch_agent" ]; then
         utils_show_status "info" "Removing LaunchAgent file: $launch_agent"
         rm -f "$launch_agent" 2>/dev/null
     fi
     
-    if [ -f "$launch_daemon" ]; then
-        utils_show_status "info" "Removing LaunchDaemon file (requires sudo): $launch_daemon"
-        sudo rm -f "$launch_daemon" 2>/dev/null
-    fi
-    
-    # Reset permissions if needed
+    # Root-owned leftovers (from `sudo brew services`) need administrator
+    # rights; show the exact commands and only run them with explicit consent
     local cellar_path="$HOMEBREW_PREFIX/Cellar/$service_name"
     local opt_path="$HOMEBREW_PREFIX/opt/$service_name"
-    
-    if [ -d "$cellar_path" ]; then
-        utils_show_status "info" "Resetting permissions for: $cellar_path"
-        # Get secure username and validate it
-        local username
-        username="$(id -un)"
-        if utils_validate_username "$username"; then
-            sudo chown -R "$username" "$cellar_path" 2>/dev/null
-        else
-            utils_show_status "error" "Invalid username detected, skipping permission reset"
+    local username
+    username="$(id -un)"
+    local -a root_cmds=()
+    if [ -f "$launch_daemon" ]; then
+        root_cmds+=("rm -f \"$launch_daemon\"")
+    fi
+    if utils_validate_username "$username"; then
+        if [ -d "$cellar_path" ] && [ -n "$(find "$cellar_path" -maxdepth 3 -user root -print -quit 2>/dev/null)" ]; then
+            root_cmds+=("chown -R \"$username\" \"$cellar_path\"")
+        fi
+        if [ -d "$opt_path" ] && [ -n "$(find "$opt_path/" -maxdepth 3 -user root -print -quit 2>/dev/null)" ]; then
+            root_cmds+=("chown -R \"$username\" \"$opt_path\"")
         fi
     fi
-    
-    if [ -d "$opt_path" ]; then
-        utils_show_status "info" "Resetting permissions for: $opt_path"
-        # Get secure username and validate it
-        local username
-        username="$(id -un)"
-        if utils_validate_username "$username"; then
-            sudo chown -R "$username" "$opt_path" 2>/dev/null
-        else
-            utils_show_status "error" "Invalid username detected, skipping permission reset"
+    if [ ${#root_cmds[@]} -gt 0 ]; then
+        utils_show_status "warning" "These root-owned leftovers need administrator rights to fix:"
+        local root_cmd
+        for root_cmd in "${root_cmds[@]}"; do
+            printf "    sudo %s\n" "$root_cmd"
+        done
+        printf "  Run them now with sudo? (y/N) "
+        if [ "$(utils_validate_yes_no "" "n")" = "y" ]; then
+            [ -f "$launch_daemon" ] && sudo rm -f "$launch_daemon"
+            if utils_validate_username "$username"; then
+                [ -d "$cellar_path" ] && sudo chown -R "$username" "$cellar_path"
+                [ -d "$opt_path" ] && sudo chown -R "$username" "$opt_path/"
+            fi
         fi
     fi
     
@@ -145,20 +146,9 @@ function fpm_restart {
                 if echo "$cleanup_output" | grep -q "Successfully"; then
                     utils_show_status "success" "PHP-FPM service restarted successfully after cleanup"
                 else
-                    printf "  Try with sudo instead? (y/n) "
-                    if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
-                        utils_show_status "info" "Trying with sudo..."
-                        local sudo_output
-                        sudo_output=$(sudo brew services restart "$service_name" 2>&1)
-                        if echo "$sudo_output" | grep -q "Successfully"; then
-                            utils_show_status "success" "PHP-FPM service restarted successfully with sudo"
-                            utils_show_status "warning" "Running with sudo changes file ownership. You may need to run cleanup later."
-                        else
-                            utils_show_status "error" "Failed to restart service with sudo: $sudo_output"
-                            printf "  You may need to restart manually with:\n"
-                            printf "    sudo brew services restart %s\n" "$service_name"
-                        fi
-                    fi
+                    utils_show_status "error" "Failed to restart PHP-FPM: $cleanup_output"
+                    printf "  Check the service with: brew services info %s\n" "$service_name"
+                    printf "  Avoid 'sudo brew services': it makes Homebrew files root-owned.\n"
                 fi
             elif echo "$restart_output" | grep -q "already started"; then
                 utils_show_status "warning" "Service reports as already started. Forcing stop and restart..."
@@ -217,11 +207,9 @@ function fpm_restart {
                     printf "    brew reinstall %s\n" "$service_name"
                 fi
             else
-                printf "  Try with sudo? (y/n) "
-                if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
-                    utils_show_status "info" "Trying with sudo..."
-                    sudo brew services start "$service_name"
-                fi
+                utils_show_status "error" "Failed to start PHP-FPM: $start_output"
+                printf "  Check the service with: brew services info %s\n" "$service_name"
+                printf "  Avoid 'sudo brew services': it makes Homebrew files root-owned.\n"
             fi
         fi
     fi

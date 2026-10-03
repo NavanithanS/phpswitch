@@ -405,8 +405,12 @@ function version_uninstall_php {
                 utils_show_status "warning" "Cannot determine config directory for '$version'; skipping"
             elif [ -d "$HOMEBREW_PREFIX/etc/php/$php_version" ]; then
                 utils_show_status "info" "Removing configuration files..."
-                sudo rm -rf "$HOMEBREW_PREFIX/etc/php/$php_version"
-                utils_show_status "success" "Configuration files removed"
+                if rm -rf "$HOMEBREW_PREFIX/etc/php/$php_version"; then
+                    utils_show_status "success" "Configuration files removed"
+                else
+                    utils_show_status "error" "Could not remove $HOMEBREW_PREFIX/etc/php/$php_version"
+                    printf "  If it is owned by root, run:\n    sudo rm -rf \"%s\"\n" "$HOMEBREW_PREFIX/etc/php/$php_version"
+                fi
             else
                 utils_show_status "warning" "Configuration directory not found at $HOMEBREW_PREFIX/etc/php/$php_version"
             fi
@@ -551,13 +555,20 @@ function version_switch_php {
             fi
             
             if [ -d "$php_bin_path" ]; then
+                local link_failed=false
                 for file in "$php_bin_path"/*; do
                     if [ -f "$file" ] && [ -x "$file" ]; then
                         local filename
                         filename=$(basename "$file")
-                        sudo ln -sf "$file" "$HOMEBREW_PREFIX/bin/$filename" 2>/dev/null
+                        ln -sf "$file" "$HOMEBREW_PREFIX/bin/$filename" 2>/dev/null || link_failed=true
                     fi
                 done
+                if [ "$link_failed" = "true" ]; then
+                    utils_show_status "error" "Could not link into $HOMEBREW_PREFIX/bin (it may contain root-owned files)"
+                    printf "  Fix ownership with:\n    sudo chown -R %s \"%s/bin\"\n" "$(id -un)" "$HOMEBREW_PREFIX"
+                    printf "  then run: brew link --overwrite %s\n" "$brew_version"
+                    exit 1
+                fi
                 utils_show_status "success" "Manual linking completed"
             else
                 utils_show_status "error" "Could not find PHP installation directory"

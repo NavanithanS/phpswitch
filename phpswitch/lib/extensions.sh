@@ -125,13 +125,21 @@ function ext_manage_extensions {
                 elif [ "$ext_action" = "2" ]; then
                     utils_show_status "info" "Disabling $ext_name..."
                     if [ -f "$ini_dir/conf.d/ext-$ext_name.ini" ]; then
-                        sudo mv "$ini_dir/conf.d/ext-$ext_name.ini" "$ini_dir/conf.d/ext-$ext_name.ini.disabled"
-                        utils_show_status "success" "Extension $ext_name disabled"
-                        fpm_restart "$php_version"
+                        if mv "$ini_dir/conf.d/ext-$ext_name.ini" "$ini_dir/conf.d/ext-$ext_name.ini.disabled"; then
+                            utils_show_status "success" "Extension $ext_name disabled"
+                            fpm_restart "$php_version"
+                        else
+                            utils_show_status "error" "Could not rename $ini_dir/conf.d/ext-$ext_name.ini"
+                            printf "  If it is owned by root, run:\n    sudo mv \"%s\" \"%s.disabled\"\n" "$ini_dir/conf.d/ext-$ext_name.ini" "$ini_dir/conf.d/ext-$ext_name.ini"
+                        fi
                     elif [ -f "$ini_dir/conf.d/$ext_name.ini" ]; then
-                        sudo mv "$ini_dir/conf.d/$ext_name.ini" "$ini_dir/conf.d/$ext_name.ini.disabled"
-                        utils_show_status "success" "Extension $ext_name disabled"
-                        fpm_restart "$php_version"
+                        if mv "$ini_dir/conf.d/$ext_name.ini" "$ini_dir/conf.d/$ext_name.ini.disabled"; then
+                            utils_show_status "success" "Extension $ext_name disabled"
+                            fpm_restart "$php_version"
+                        else
+                            utils_show_status "error" "Could not rename $ini_dir/conf.d/$ext_name.ini"
+                            printf "  If it is owned by root, run:\n    sudo mv \"%s\" \"%s.disabled\"\n" "$ini_dir/conf.d/$ext_name.ini" "$ini_dir/conf.d/$ext_name.ini"
+                        fi
                     else
                         utils_show_status "error" "Could not find configuration file for $ext_name"
                     fi
