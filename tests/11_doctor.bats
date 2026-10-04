@@ -125,3 +125,21 @@ RC
     [[ ! "$output" =~ "Checking dependencies" ]]
     [[ ! "$output" =~ "All critical dependencies" ]]
 }
+
+@test "Laravel Valet is reported from its config dir or the valet command" {
+    run_doctor
+    [[ "$output" != *"Laravel Valet"* ]]
+
+    mkdir -p "$HOME/.config/valet"
+    run_doctor
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"[warn] Laravel Valet is installed ($HOME/.config/valet)"* ]]
+    [[ "$output" == *"valet use VERSION"* ]]
+    rm -r "$HOME/.config/valet"
+
+    mkdir -p "$TEST_ROOT/composer-bin"
+    printf '#!/bin/sh\nexit 0\n' > "$TEST_ROOT/composer-bin/valet"
+    chmod +x "$TEST_ROOT/composer-bin/valet"
+    DOCTOR_PATH="$BASE_PATH:$TEST_ROOT/composer-bin" run_doctor
+    [[ "$output" == *"Laravel Valet is installed ($TEST_ROOT/composer-bin/valet)"* ]]
+}

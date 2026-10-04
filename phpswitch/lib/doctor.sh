@@ -166,6 +166,20 @@ function doctor_run {
             "Root services change file ownership; use the FPM menu's cleanup, then 'brew services start' without sudo"
     fi
 
+    # 8b. Laravel Valet runs its own PHP-FPM as root and relinks PHP itself
+    local valet=""
+    if [ -d "$HOME/.config/valet" ]; then
+        valet="$HOME/.config/valet"
+    elif [ -d "$HOME/.valet" ]; then
+        valet="$HOME/.valet"
+    elif command -v valet >/dev/null 2>&1; then
+        valet=$(command -v valet)
+    fi
+    if [ -n "$valet" ]; then
+        doctor_warn "Laravel Valet is installed ($valet)" \
+            "Change the global PHP with 'valet use VERSION' so Valet's PHP-FPM follows; 'phpswitch global' and FPM restarts don't update Valet. Per-shell 'phpswitch use' is unaffected"
+    fi
+
     # 9. Root-owned files in PHP kegs (bounded search)
     local root_owned
     root_owned=$(find "$HOMEBREW_PREFIX/Cellar" -maxdepth 3 -path "*/Cellar/php*" -user root -print 2>/dev/null | head -n 1)

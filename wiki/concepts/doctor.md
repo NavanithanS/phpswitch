@@ -3,7 +3,7 @@ title: Doctor
 category: concept
 tags: [doctor, diagnostics, troubleshooting]
 created: 2026-10-03
-updated: 2026-10-03
+updated: 2026-10-04
 sources: 0
 ---
 
@@ -24,9 +24,10 @@ sources: 0
 | 5 | Per-shell integration in the login shell's rc file, and whether it's loaded (`PHPSWITCH_BIN` set) | warn |
 | 6 | `phpswitch use` pin active | warn |
 | 7 | Legacy auto-switch hook in any rc file (`auto_legacy_rc_candidates`) | warn |
-| 7b | PHP `PATH` assignments (`export PATH=`, `PATH=`, fish `set … PATH`, `fish_add_path`) mentioning `/opt/php` **outside** phpswitch's managed block, in `.zshrc`, `.zprofile`, `.bashrc`, `.bash_profile`, `.profile` and `config.fish`. These are not removed automatically, because no known phpswitch version wrote them in that form. | warn |
+| 7b | PHP `PATH` assignments (`export PATH=`, `PATH=`, fish `set … PATH`, `fish_add_path`) mentioning `/opt/php` **outside** phpswitch's managed block, in every file from `auto_rc_candidates` (`.zshrc`, `.zprofile`, `.bashrc`, `.bash_profile`, `.bash_login`, `.profile`, `config.fish`). These are not removed automatically, because no known phpswitch version wrote them in that form. | warn |
 | 8 | Project version: not installed (fail), or the shell is using a different one (warn) | fail / warn |
 | 9 | Root PHP-FPM LaunchDaemons (`$PHPSWITCH_LAUNCH_DAEMONS_DIR`, default `/Library/LaunchDaemons`) | warn |
+| 9b | Laravel Valet installed (`~/.config/valet`, `~/.valet`, or `valet` on PATH): Valet runs its own root PHP-FPM, so the hint says to change the global version with `valet use` | warn |
 | 10 | Root-owned files in `Cellar/php*` (depth ≤ 3) | warn |
 
 ## See also

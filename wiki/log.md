@@ -112,3 +112,7 @@ New flag, the inverse of `--install-auto-switch`: it runs `auto_uninstall` and e
 ## [2026-10-04] lint | Per-prompt project re-check
 
 All three hooks skipped when `$PWD` hadn't changed, so a `.php-version` created or edited in the current directory only applied after leaving and re-entering it. The hook now also runs on zsh `precmd` and the fish `fish_prompt` event (bash already ran it from `PROMPT_COMMAND`). It compares a builtin-only `_phpswitch_signature` and re-detects only when that or `$PWD` changes. It also returns the caller's exit status. Updated [[concepts/shell-integration]], AGENTS.md and [[decisions/roadmap-2026]].
+
+## [2026-10-04] lint | Valet/Herd and PECL decided
+
+Valet: `doctor` warns when Valet is installed (check 9b) and recommends `valet use`. phpswitch doesn't hand `global` over to Valet, because `valet use` needs sudo. Herd needs nothing new. PECL install won't be done. The README now points Valet users to `valet use` and lists every rc file the migration cleans. Updated [[concepts/doctor]] and [[decisions/roadmap-2026]].

@@ -117,8 +117,8 @@ Rough priority order. Confidence in brackets.
 3. ✅ (4c, 2026-10-03) **Shell completions** for zsh, bash and fish [high]. The formula line waits for a release; see [[concepts/release-and-update]].
 4. ✅ (already existed, tested in `01_core.bats`) **`--json` output** [high]
 5. ✅ (4d, 2026-10-03; see [[concepts/auto-switch]]) **Composer constraint resolution** [medium]. The plan said "highest"; implemented as historical-first, then *lowest* satisfying, so working projects never move: resolve `^8.1 || ^8.2` or `>=8.1 <8.4` to the highest installed version that satisfies it.
-6. ⏸ **Deferred: needs the user's decision.** **Valet / Herd awareness** [low-medium]: detect Valet and offer to delegate `global` to `valet use`.
-7. ⏸ **Deferred: needs the user's decision.** **PECL extension install per version** [low]: `phpswitch ext install redis`. PECL varies a lot between versions, so treat this as experimental.
+6. ✅ (2026-10-04, reduced scope) **Valet / Herd awareness** [low-medium]: `doctor` warns when Valet is installed and points to `valet use`. No delegation, because `valet use` needs sudo and phpswitch never escalates on its own. Herd's PHP isn't Homebrew's; doctor's "other php on PATH" check already covers it.
+7. ✖ Won't do (decided 2026-10-04). **PECL extension install per version** [low]: `phpswitch ext install redis`. Each Homebrew PHP already ships its own `pecl`, and `shivammathur/extensions` provides prebuilt per-version extensions.
 
 ## Cross-cutting (fold into any phase that touches the code)
 
