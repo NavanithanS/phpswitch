@@ -446,7 +446,7 @@ function cmd_configure_phpswitch {
     case $option in
         1)
             printf "  Auto restart PHP-FPM when switching? (y/n) "
-            if [ "$(utils_validate_yes_no "" "$AUTO_RESTART_PHP_FPM")" = "y" ]; then
+            if [ "$(utils_validate_yes_no "" "$([ "$AUTO_RESTART_PHP_FPM" = "true" ] && echo y || echo n)")" = "y" ]; then
                 AUTO_RESTART_PHP_FPM=true
             else
                 AUTO_RESTART_PHP_FPM=false
@@ -454,7 +454,7 @@ function cmd_configure_phpswitch {
             ;;
         2)
             printf "  Create backups of config files before modifying? (y/n) "
-            if [ "$(utils_validate_yes_no "" "$BACKUP_CONFIG_FILES")" = "y" ]; then
+            if [ "$(utils_validate_yes_no "" "$([ "$BACKUP_CONFIG_FILES" = "true" ] && echo y || echo n)")" = "y" ]; then
                 BACKUP_CONFIG_FILES=true
             else
                 BACKUP_CONFIG_FILES=false

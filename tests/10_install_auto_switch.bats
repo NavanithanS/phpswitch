@@ -330,3 +330,30 @@ RC
     [ "$output" = "0" ]
     grep -qx 'AUTO_SWITCH_PHP_VERSION=false' "$HOME/.phpswitch.conf"
 }
+
+@test "config menu: Enter keeps FPM restart and backup settings; n turns them off" {
+    # core_load_config would install phpswitch's EXIT trap inside bats
+    utils_setup_temp_cleanup_trap() { :; }
+    core_create_default_config
+    utils_set_config_value "AUTO_RESTART_PHP_FPM" "true" "$HOME/.phpswitch.conf"
+    utils_set_config_value "BACKUP_CONFIG_FILES" "true" "$HOME/.phpswitch.conf"
+
+    run cmd_configure_phpswitch <<< $'1\n\nn'
+    [ "$status" -eq 0 ]
+    run cmd_configure_phpswitch <<< $'2\n\nn'
+    [ "$status" -eq 0 ]
+    grep -qx 'AUTO_RESTART_PHP_FPM=true' "$HOME/.phpswitch.conf"
+    grep -qx 'BACKUP_CONFIG_FILES=true' "$HOME/.phpswitch.conf"
+
+    run cmd_configure_phpswitch <<< $'1\nn\nn'
+    [ "$status" -eq 0 ]
+    run cmd_configure_phpswitch <<< $'2\nn\nn'
+    [ "$status" -eq 0 ]
+    grep -qx 'AUTO_RESTART_PHP_FPM=false' "$HOME/.phpswitch.conf"
+    grep -qx 'BACKUP_CONFIG_FILES=false' "$HOME/.phpswitch.conf"
+
+    # Enter on a setting that is off keeps it off
+    run cmd_configure_phpswitch <<< $'1\n\nn'
+    [ "$status" -eq 0 ]
+    grep -qx 'AUTO_RESTART_PHP_FPM=false' "$HOME/.phpswitch.conf"
+}

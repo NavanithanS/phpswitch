@@ -92,3 +92,7 @@ The menu's "Disable auto-switching" only set `AUTO_SWITCH_PHP_VERSION=false`, wh
 ## [2026-10-04] lint | Fish runtime test now actually runs fish
 
 The first CI run of `fish: hook detects project versions inside HOME only` failed with exit 127: under `env -i PATH="$BASE_PATH"`, `env` couldn't find Homebrew's fish. The test now resolves fish with `command -v` and runs it by absolute path. Added the gotcha to [[concepts/testing]].
+
+## [2026-10-04] lint | Config menu options 1/2 keep their value on Enter
+
+Like option 5 before, "auto restart PHP-FPM" and "backup config files" passed `true`/`false` as the prompt default, so pressing Enter (or `--yes`) turned them off. They now pass `y`/`n`. Still open: the closing "Make additional configuration changes?" prompt defaults to `y`, so on EOF the menu re-enters itself forever.
