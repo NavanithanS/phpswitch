@@ -130,7 +130,8 @@ install_untouched() {
 }
 
 @test "--update exits non-zero when the update is refused" {
-    publish_release v1.5.0 1.5.0 bad
+    # Runs the built script, so the fake release must be newer than any real one
+    publish_release v99.0.0 99.0.0 bad
     printf 'AUTO_RESTART_PHP_FPM=false\n' > "$HOME/.phpswitch.conf"
     run "$REPO_ROOT/php-switcher.sh" --update < /dev/null
     [ "$status" -ne 0 ]
