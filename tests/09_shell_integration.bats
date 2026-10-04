@@ -260,6 +260,35 @@ hook_dir() {
     # unsafe content -> none
     echo '8.2;id' > "$PROJECT/.php-version"
     [ -z "$(hook_dir "$PROJECT")" ]
+
+    # full patch version (phpenv style) -> its minor install
+    echo "8.2.10" > "$PROJECT/.php-version"
+    [ "$(hook_dir "$PROJECT")" = "$FAKE_BREW_PREFIX/opt/php@8.2" ]
+    [ "$(expected_dir "$PROJECT")" = "$FAKE_BREW_PREFIX/opt/php@8.2" ]
+    rm "$PROJECT/.php-version"
+
+    # a sibling of HOME sharing its prefix is outside HOME -> none
+    mkdir -p "${HOME}x"
+    echo "8.2" > "${HOME}x/.php-version"
+    [ -z "$(hook_dir "${HOME}x")" ]
+    [ -z "$(expected_dir "${HOME}x")" ]
+}
+
+@test "fish: hook detects project versions inside HOME only" {
+    command -v fish >/dev/null || skip "fish not installed"
+    "$BIN" init fish > "$TEST_ROOT/init.fish"
+    echo "8.2" > "$PROJECT/.php-version"
+    mkdir -p "${HOME}x"
+    echo "8.3" > "${HOME}x/.php-version"
+    run env -i HOME="$HOME" PATH="$BASE_PATH" FAKE_BREW_PREFIX="$FAKE_BREW_PREFIX" \
+        FAKE_BREW_LIST="$FAKE_BREW_LIST" FAKE_BREW_LOG="$FAKE_BREW_LOG" \
+        fish --no-config -c "source '$TEST_ROOT/init.fish'
+cd '$PROJECT/src'; set -l r (_phpswitch_detect); echo \"in=\$r\"
+cd '${HOME}x'; set -l r (_phpswitch_detect); echo \"out=\$r\""
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"in=$FAKE_BREW_PREFIX/opt/php@8.2"* ]]
+    [[ "$output" == *"out="* ]]
+    [[ "$output" != *"out=$FAKE_BREW_PREFIX"* ]]
 }
 
 @test "wrapper works in shells with nounset enabled" {

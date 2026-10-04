@@ -49,9 +49,12 @@ function version_check_project {
     local php_version_file=""
     local project_version=""
     local custom_files=(".php-version" ".phpversion")
+    local home="${HOME%/}"
     
-    # Walk parent directories up to $HOME (FEAT-03: don't go beyond home)
-    while [ "$current_dir" != "/" ] && [ "$current_dir" != "." ] && [[ "$current_dir" == "$HOME"* ]]; do
+    # Walk parent directories up to $HOME (FEAT-03: don't go beyond home).
+    # Match whole path components so /Users/bobby isn't inside /Users/bob.
+    while [ "$current_dir" != "/" ] && [ "$current_dir" != "." ] &&
+          { [ "$current_dir" = "$home" ] || [[ "$current_dir" == "$home"/* ]]; }; do
         # 1. Custom PHPSwitch files (Highest Priority)
         for file in "${custom_files[@]}"; do
             if [ -f "$current_dir/$file" ]; then
@@ -113,7 +116,12 @@ function version_check_project {
         fi
         
         # Handle different version formats
-        if [[ "$project_version" == php@* ]]; then
+        if [[ "${project_version#php@}" =~ ^([0-9]+)\.([0-9]+)(\.[0-9]+)?$ ]]; then
+            # X.Y or a full patch version (8.2.10, phpenv style): Homebrew
+            # installs are per minor, so use php@X.Y
+            echo "php@${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+            return 0
+        elif [[ "$project_version" == php@* ]]; then
             # Already in the right format (php@8.1)
             echo "$project_version"
             return 0

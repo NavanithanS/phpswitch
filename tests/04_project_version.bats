@@ -112,3 +112,29 @@ JSON
     run detect_in "$PROJECT"
     [ "$status" -ne 0 ]
 }
+
+@test "full patch version maps to its minor install" {
+    echo "8.2.10" > "$PROJECT/.php-version"
+    run detect_in "$PROJECT"
+    [ "$status" -eq 0 ]
+    [ "$output" = "php@8.2" ]
+
+    echo "php@8.3.1" > "$PROJECT/.php-version"
+    run detect_in "$PROJECT"
+    [ "$output" = "php@8.3" ]
+}
+
+@test "a sibling directory sharing the HOME prefix is outside HOME" {
+    mkdir -p "${HOME}x/app"
+    echo "8.2" > "${HOME}x/app/.php-version"
+    run detect_in "${HOME}x/app"
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
+}
+
+@test "HOME with a trailing slash still finds project files" {
+    echo "8.2" > "$PROJECT/.php-version"
+    HOME="$HOME/" run detect_in "$PROJECT/src"
+    [ "$status" -eq 0 ]
+    [ "$output" = "php@8.2" ]
+}

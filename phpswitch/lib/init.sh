@@ -171,11 +171,12 @@ _phpswitch_delegate() {
 
 # Find the PHP directory for $PWD; sets _phpswitch_found (empty if none).
 # Mirrors version_check_project: per directory, .php-version/.phpversion,
-# then composer.json/.tool-versions, walking up while inside $HOME.
+# then composer.json/.tool-versions, walking up while inside $HOME
+# (whole path components: /Users/bobby is not inside /Users/bob).
 _phpswitch_detect() {
-    local dir="$PWD" f v n line
+    local dir="$PWD" home="${HOME%/}" f v n line
     _phpswitch_found=""
-    while [ "$dir" != "/" ] && [[ "$dir" == "$HOME"* ]]; do
+    while [ "$dir" != "/" ] && { [ "$dir" = "$home" ] || [[ "$dir" == "$home"/* ]]; }; do
         for f in .php-version .phpversion; do
             if [ -f "$dir/$f" ]; then
                 v=""
@@ -301,7 +302,8 @@ end
 # Mirrors version_check_project (see the bash/zsh variant)
 function _phpswitch_detect
     set -l dir $PWD
-    while test "$dir" != "/"; and string match -q -- "$HOME*" "$dir"
+    set -l home (string replace -r '/$' '' -- "$HOME")
+    while test "$dir" != "/"; and begin; test "$dir" = "$home"; or string match -q -- "$home/*" "$dir"; end
         for f in .php-version .phpversion
             if test -f "$dir/$f"
                 set -l v (string replace -ra '\s' '' < "$dir/$f" | string join '')
