@@ -49,6 +49,7 @@ Unit tests call module functions directly. CLI tests (`07_cli.bats`) run the bui
 - Shell detection reports `bash` under bats. Override `shell_detect_shell` in the test to cover zsh and fish.
 - `core_get_installed_php_versions` memoizes `brew list` per process. Calls made through `run` (a subshell) are unaffected.
 - Tests that run a shell under `env -i PATH="$BASE_PATH"` only find binaries in `/usr/bin` and `/bin`. Resolve Homebrew tools such as fish with `command -v` first and call them by absolute path, otherwise `env` exits 127 with no visible output.
+- `fake_url` copies the file when it's called. If you change the file afterwards (a re-signed `.minisig`, a new release body), call `fake_url` again, or the fake `curl` keeps serving the old copy.
 
 ## CI
 

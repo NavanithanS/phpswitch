@@ -260,6 +260,9 @@ STUB
     minisign -G -W -p "$keys/other.pub" -s "$keys/other.key" > /dev/null
     minisign -S -s "$keys/other.key" -m "$TEST_ROOT/release/php-switcher.sh" \
         -x "$TEST_ROOT/release/php-switcher.sh.minisig" > /dev/null
+    # fake_url serves a copy, so publish the new signature again
+    fake_url "https://github.com/$REPO_SLUG/releases/download/v1.5.0/php-switcher.sh.minisig" \
+        "$TEST_ROOT/release/php-switcher.sh.minisig"
     run cmd_update_self <<< "y"
     [ "$status" -ne 0 ]
     [[ "$output" == *"Signature verification failed"* ]]

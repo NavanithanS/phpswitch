@@ -120,3 +120,7 @@ Valet: `doctor` warns when Valet is installed (check 9b) and recommends `valet u
 ## [2026-10-04] lint | minisign release signatures
 
 `tools/release.sh` signs `php-switcher.sh` with minisign and uploads `php-switcher.sh.minisig`. It verifies the signature against the public key built into the artifact before tagging, and refuses to start without minisign, the key or `PHPSWITCH_MINISIGN_PUBKEY`. `--update` verifies the signature when minisign is installed, refusing a missing or bad one; otherwise it warns and relies on the checksum. CI installs minisign for a real round-trip test. The public key is still empty until the user generates the key pair. Updated AGENTS.md, [[concepts/release-and-update]] and [[decisions/roadmap-2026]].
+
+## [2026-10-04] lint | Real minisign test re-publishes its signature
+
+On its first CI run, the real minisign round trip verified a good signature, but the "different key" half wasn't refused. `fake_url` had copied the original valid signature, so the re-signed file was never served. The test now calls `fake_url` again, and the gotcha is in [[concepts/testing]].
