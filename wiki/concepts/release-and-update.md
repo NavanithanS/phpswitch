@@ -11,7 +11,7 @@ sources: 0
 
 ## Releasing (`tools/release.sh`)
 
-Before running it, add the version's section to `CHANGELOG.md` (Keep a Changelog format) and commit it. Leave `PHPSWITCH_VERSION` alone: if it already equals the new version, the script skips the rebuild and the bump commit. `--generate-notes` produces only a PR list, so write the GitHub release notes from the CHANGELOG section and apply them with `gh release edit vX.Y.Z --notes-file`.
+Run it on **master**, then merge master into `release`. Branches flow one way (master → `release`), so a commit made only on `release` never reaches master. Master's `php-switcher.sh` is what installs up to 1.4.5 download on `--update`, and they update only when its version differs from their own. Before running it, add the version's section to `CHANGELOG.md` (Keep a Changelog format) and commit it. Leave `PHPSWITCH_VERSION` alone: if it already equals the new version, the script skips the rebuild and the bump commit. `--generate-notes` produces only a PR list, so write the GitHub release notes from the CHANGELOG section and apply them with `gh release edit vX.Y.Z --notes-file`.
 
 1. Prompts for the new version (accepts `1.5.0` or `v1.5.0`; must be `X.Y.Z`).
 2. Writes it to `PHPSWITCH_VERSION` in `phpswitch/config/defaults.sh`, the single source of the version. Rebuilds, commits and pushes.
@@ -22,9 +22,7 @@ Before running it, add the version's section to `CHANGELOG.md` (Keep a Changelog
 
 ## Release-time follow-ups
 
-- **Formula completions:** once a release containing `phpswitch completions` is cut, add this to `Formula/phpswitch.rb` (and the tap):
-  `generate_completions_from_executable(bin/"phpswitch", "completions")`
-  Don't add it before then. The formula still installs v1.4.4, which opens the interactive menu on an unknown word, so `brew install` would hang.
+- **Formula completions:** since v2.0.0, `Formula/phpswitch.rb` (and the tap) has `generate_completions_from_executable(bin/"phpswitch", "completions")`. `release.sh` copies the whole repo formula to the tap, so keep the line in the repo copy or the next release removes it from the tap.
 
 ## Self-update (`phpswitch --update` → `cmd_update_self`)
 
