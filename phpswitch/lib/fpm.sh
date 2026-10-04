@@ -13,6 +13,13 @@ function fpm_get_service_name {
     fi
 }
 
+# Whether any PHP-FPM service is started (exact field matches avoid "php"
+# matching "php@8.1")
+function fpm_any_running {
+    brew services list 2>/dev/null |
+        awk '$1 ~ /^php(@[0-9]+\.[0-9]+)?$/ && $2 == "started" { found = 1 } END { exit !found }'
+}
+
 # Function to stop all other PHP-FPM services except the active one
 function fpm_stop_other_services {
     local active_version="$1"

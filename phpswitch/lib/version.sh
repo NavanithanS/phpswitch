@@ -597,8 +597,9 @@ function version_switch_php {
     local reload_script
     reload_script=$(shell_create_reload_script "$new_version")
     
-    # Restart PHP-FPM if it's being used (not when nothing changed)
-    if [ "$version_changed" = "true" ]; then
+    # Move PHP-FPM to the new version only if one is running (not when
+    # nothing changed, and never start one that wasn't running)
+    if [ "$version_changed" = "true" ] && [ "$AUTO_RESTART_PHP_FPM" = "true" ] && fpm_any_running; then
         fpm_restart "$new_version"
     fi
     

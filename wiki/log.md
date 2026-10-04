@@ -96,3 +96,7 @@ The first CI run of `fish: hook detects project versions inside HOME only` faile
 ## [2026-10-04] lint | Config menu options 1/2 keep their value on Enter
 
 Like option 5 before, "auto restart PHP-FPM" and "backup config files" passed `true`/`false` as the prompt default, so pressing Enter (or `--yes`) turned them off. They now pass `y`/`n`. Still open: the closing "Make additional configuration changes?" prompt defaults to `y`, so on EOF the menu re-enters itself forever.
+
+## [2026-10-04] lint | Global switch no longer starts PHP-FPM
+
+`version_switch_php` called `fpm_restart` on every version change, and that starts PHP-FPM even when none was running. It now does so only when a PHP service is `started` (`fpm_any_running`) and `AUTO_RESTART_PHP_FPM=true`. The extension paths still call `fpm_restart` directly. Updated [[concepts/fpm-management]].

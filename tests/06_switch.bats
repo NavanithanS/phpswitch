@@ -59,6 +59,8 @@ teardown() {
 @test "switching to the already-active version doesn't restart FPM or rewrite the rc file" {
     local restarts="$TEST_ROOT/fpm_restarts"
     fpm_restart() { echo "$1" >> "$restarts"; }
+    fpm_any_running() { return 0; }
+    AUTO_RESTART_PHP_FPM=true
     run version_switch_php php@8.2 true
     [ "$status" -eq 0 ]
     [ "$(wc -l < "$restarts" | tr -d ' ')" = "1" ]
@@ -76,6 +78,8 @@ teardown() {
 @test "reinstalling the active version still restarts FPM" {
     local restarts="$TEST_ROOT/fpm_restarts"
     fpm_restart() { echo "$1" >> "$restarts"; }
+    fpm_any_running() { return 0; }
+    AUTO_RESTART_PHP_FPM=true
     fake_php_link php@8.2
     mv "$FAKE_BREW_PREFIX/opt/php@8.2/bin/php" "$TEST_ROOT/php82"
     # fake `brew reinstall` puts the binary back
@@ -115,4 +119,25 @@ teardown() {
     grep -qx 'services restart php@8.2' "$FAKE_BREW_LOG"
     run grep -x 'services start php@8.2' "$FAKE_BREW_LOG"
     [ "$status" -ne 0 ]
+}
+
+@test "global switch starts no PHP-FPM when none was running" {
+    source "$REPO_ROOT/phpswitch/lib/fpm.sh"   # undo the setup stub
+    AUTO_RESTART_PHP_FPM=true
+    printf 'php@8.1 stopped nava ~/Library/LaunchAgents/homebrew.mxcl.php@8.1.plist\n' > "$TEST_ROOT/services"
+    FAKE_BREW_SERVICES="$TEST_ROOT/services" run version_switch_php php@8.2 true
+    [ "$status" -eq 0 ]
+    grep -q '^link --force php@8.2$' "$FAKE_BREW_LOG"
+    run grep -E '^services (start|stop|restart)' "$FAKE_BREW_LOG"
+    [ "$status" -ne 0 ]
+}
+
+@test "global switch moves a running PHP-FPM to the new version" {
+    source "$REPO_ROOT/phpswitch/lib/fpm.sh"   # undo the setup stub
+    AUTO_RESTART_PHP_FPM=true
+    printf 'php@8.1 started nava ~/Library/LaunchAgents/homebrew.mxcl.php@8.1.plist\n' > "$TEST_ROOT/services"
+    FAKE_BREW_SERVICES="$TEST_ROOT/services" run version_switch_php php@8.2 true
+    [ "$status" -eq 0 ]
+    grep -qx 'services stop php@8.1' "$FAKE_BREW_LOG"
+    grep -qx 'services start php@8.2' "$FAKE_BREW_LOG"
 }

@@ -2293,8 +2293,9 @@ function version_switch_php {
     local reload_script
     reload_script=$(shell_create_reload_script "$new_version")
     
-    # Restart PHP-FPM if it's being used (not when nothing changed)
-    if [ "$version_changed" = "true" ]; then
+    # Move PHP-FPM to the new version only if one is running (not when
+    # nothing changed, and never start one that wasn't running)
+    if [ "$version_changed" = "true" ] && [ "$AUTO_RESTART_PHP_FPM" = "true" ] && fpm_any_running; then
         fpm_restart "$new_version"
     fi
     
@@ -2359,6 +2360,13 @@ function fpm_get_service_name {
     else
         echo "$version"
     fi
+}
+
+# Whether any PHP-FPM service is started (exact field matches avoid "php"
+# matching "php@8.1")
+function fpm_any_running {
+    brew services list 2>/dev/null |
+        awk '$1 ~ /^php(@[0-9]+\.[0-9]+)?$/ && $2 == "started" { found = 1 } END { exit !found }'
 }
 
 # Function to stop all other PHP-FPM services except the active one
