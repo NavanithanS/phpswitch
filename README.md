@@ -6,16 +6,20 @@ PHP version manager for macOS. Switch between Homebrew-managed PHP versions from
 
 - Interactive menu and full non-interactive CLI flag support
 - Switch, install, and uninstall PHP versions
-- Automatic shell configuration updates (`.zshrc`, `.bashrc`, `config.fish`)
-- Project-level PHP version detection at startup via `.php-version`, `composer.json`, or `.tool-versions`
-- Auto-switching when changing directories (shell hook)
+- Per-shell switching (`phpswitch use`) that changes PHP in the current shell only
+- Project-level PHP version detection via `.php-version`, `composer.json` (`require.php` constraints), or `.tool-versions`
+- Auto-switching when changing directories, without touching other terminals
+- `phpswitch doctor` to diagnose PATH, shell integration and PHP-FPM problems
+- Shell completions for bash, zsh and fish
 - PHP-FPM service management
 - PHP extension enable/disable
 - Smart caching for available version lookups (1-hour TTL)
-- Permission repair tools and automatic fallbacks
-- Self-update from GitHub
+- No automatic `sudo`: it prints the command instead (only an explicit install, uninstall or update asks for your password, and only when the target directory isn't writable)
+- Self-update from GitHub releases, checked against a SHA-256 checksum and a minisign signature
 - Bash, Zsh, and Fish shell support
 - Apple Silicon (M1/M2/M3) and Intel compatible
+
+See [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
 
 ## Requirements
 
@@ -87,7 +91,7 @@ phpswitch
 On startup, PHPSwitch checks your project directory for a `.php-version`, `composer.json` (`require.php`), or `.tool-versions` file and shows a notice if the active PHP version doesn't match.
 
 ```
-PHPSwitch  PHP Version Manager for macOS  v1.4.5
+PHPSwitch  PHP Version Manager for macOS  v2.0.0
 
   Current  php@8.2  (8.2.30)
   Project  php@8.1  composer.json
@@ -138,6 +142,7 @@ phpswitch --clear-cache              clear cached data
 phpswitch --refresh-cache            refresh available versions cache
 phpswitch --fix-permissions          fix cache directory permissions
 phpswitch --install-auto-switch      add per-shell switching to your rc file
+phpswitch --uninstall-auto-switch    remove auto-switching from your rc files
 phpswitch --clear-directory-cache    clear legacy auto-switching cache
 phpswitch --check-dependencies       check system dependencies
 phpswitch --install                  install as a system command
@@ -145,6 +150,8 @@ phpswitch --uninstall                remove from system
 phpswitch --update                   update to the latest version
 phpswitch --version, -v              show version
 phpswitch --debug                    enable debug logging
+phpswitch --yes, -y                  auto-confirm prompts (non-interactive)
+phpswitch --quiet, -q                suppress the banner / non-essential output
 phpswitch --help, -h                 show this help
 ```
 

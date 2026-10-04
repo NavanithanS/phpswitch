@@ -24,6 +24,7 @@ This repository includes a structured wiki in the `wiki/` directory that serves 
 - CI (`.github/workflows/ci.yml`) runs shellcheck, the build-sync check and `bats tests/` on macOS. See `wiki/concepts/testing.md`.
 
 ## 5. Releases
+- Before releasing, add the version's section to `CHANGELOG.md` and commit it. Don't change `PHPSWITCH_VERSION` by hand: `release.sh` bumps it, and it skips the bump commit if the version is already set.
 - Always release with `tools/release.sh`. It bumps `PHPSWITCH_VERSION` in `config/defaults.sh`, creates a `vX.Y.Z` tag, and uploads `php-switcher.sh` together with `php-switcher.sh.sha256`, then patches the Homebrew formula.
 - `phpswitch --update` **refuses** any release that doesn't include `php-switcher.sh.sha256`, so never create releases by hand without it.
 - Releases are also signed with minisign (`php-switcher.sh.minisig`). `release.sh` refuses to run without `minisign`, a non-empty `PHPSWITCH_MINISIGN_PUBKEY` in `config/defaults.sh` and the secret key. When minisign is installed, `--update` refuses a missing or invalid signature. Keep `PHPSWITCH_MINISIGN_PUBKEY` a plain assignment that nothing else can override. Never run `tools/release.sh` to test changes, because it commits, pushes, tags and publishes. See `wiki/concepts/release-and-update.md`.
