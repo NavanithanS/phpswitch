@@ -16,7 +16,7 @@ Every suite does `load helpers/common` (`tests/helpers/common.bash`). `common_se
 | Piece | Purpose |
 |-------|---------|
 | `HOME=$TEST_ROOT/home` | rc files, `~/.phpswitch.conf` and caches stay in a throwaway directory |
-| `tests/helpers/bin/brew` placed first on `PATH` | Fake Homebrew. `search` returns realistic output (header, tap prefix, ✔ marker). `list` returns `$FAKE_BREW_LIST`. `link` and `unlink` really repoint `$FAKE_BREW_PREFIX/bin/php`. Every call is logged to `$FAKE_BREW_LOG`. |
+| `tests/helpers/bin/brew` placed first on `PATH` | Fake Homebrew. `search` returns realistic output (header, tap prefix, ✔ marker). `list` returns `$FAKE_BREW_LIST`. `link` and `unlink` really repoint `$FAKE_BREW_PREFIX/bin/php`. Every call is logged to `$FAKE_BREW_LOG`. `services list` prints the lines of `$FAKE_BREW_SERVICES` (a file) under its header. |
 | `FAKE_BREW_PREFIX` | Fake Homebrew prefix. `core_load_config` picks it up through `brew --prefix`. |
 | `tests/helpers/bin/curl`, `tests/helpers/bin/sudo` | Fake curl serves `$FAKE_CURL_DIR` fixtures by URL (`fake_url <url> <file>`). Fake sudo always refuses, so tests never escalate. |
 | `load_modules` | Sources defaults and all lib modules in build order, for unit tests |

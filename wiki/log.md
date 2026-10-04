@@ -84,3 +84,7 @@ Bash on macOS starts login shells that never read `.bashrc`, yet both the manage
 ## [2026-10-04] lint | Disable auto-switching removes the hook
 
 The menu's "Disable auto-switching" only set `AUTO_SWITCH_PHP_VERSION=false`, which nothing at shell startup reads, so the hook kept running. Added `auto_uninstall` (all-or-nothing removal of the integration line and legacy blocks, with backups) and made the menu judge the state from the rc files. Config option 5 also passed `true`/`false` as the prompt default, so pressing Enter turned the setting off; it now passes `y`/`n`. Updated [[concepts/shell-integration]], [[entities/lib-auto-switch]], AGENTS.md and [[decisions/roadmap-2026]].
+
+## [2026-10-04] lint | Legacy auto-switch no longer starts PHP-FPM
+
+`auto_switch_php` started the target PHP-FPM on every project `cd` even when none was running. It now only moves an FPM that is actually `started`. The fake `brew` gained `FAKE_BREW_SERVICES`. Updated [[concepts/fpm-management]] and [[decisions/roadmap-2026]]. Possibly the same issue remains on the global switch path in `lib/fpm.sh` (not yet checked).

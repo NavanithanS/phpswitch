@@ -135,7 +135,7 @@ Rough priority order. Confidence in brackets.
 | Found in | Issue | Location |
 |----------|-------|----------|
 | Phase 1 | ✅ Fixed 2026-10-04 (deleted). Bash syntax error: a nested heredoc closes the outer one. The script is unused, since `--fix-permissions` lives in `commands.sh`. Delete it or repair it. | `tools/fix-permissions.sh:170` |
-| Phase 1 | With FPM restart on, each auto-switch *starts* the target FPM service even if FPM wasn't running before. | `lib/auto-switch.sh:403-407` |
+| Phase 1 | ✅ Fixed 2026-10-04 (only running services are touched). With FPM restart on, each auto-switch *starts* the target FPM service even if FPM wasn't running before. | `lib/auto-switch.sh:403-407` |
 | Phase 1 | ✅ Fixed 2026-10-04. The upward search stops at `$HOME` using a prefix match, so `/Users/bobby` counts as inside `/Users/bob`. | `lib/version.sh:53` |
 | Phase 2 | ✅ Fixed 2026-10-04 (commits only `defaults.sh` and the artifact). `release.sh` runs `git add .` when bumping the version, which could commit stray files. | `tools/release.sh` |
 | Phase 2 | The README install command `curl`s from raw `master`, not a release asset. | `README.md:38` |
