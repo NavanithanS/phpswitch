@@ -72,3 +72,7 @@ Fixed: re-sourcing the rc file inside a project lost the per-shell version; `ini
 ## [2026-10-03] lint | Fixes from local install testing
 
 From hands-on testing: an unchanged `global`/`--switch` no longer restarts PHP-FPM or rewrites the rc file (a reinstall still restarts FPM); `use` / `use auto` confirm what the shell uses; the dependency check prints only problems; `doctor` flags unmanaged PHP `PATH` lines in rc files. Updated [[concepts/doctor]], [[concepts/shell-patching]] and [[concepts/shell-integration]].
+
+## [2026-10-04] lint | Project version detection fixes
+
+A full-patch `.php-version` (`8.2.10`, `php@8.2.10`) now resolves to `php@8.2` instead of a version that never exists. The upward search compares whole path components, so a sibling such as `/Users/bobby` is no longer treated as inside `/Users/bob`; the binary and both hooks changed together. Updated [[concepts/version-format]], [[concepts/shell-integration]] and the issue table in [[decisions/roadmap-2026]].
