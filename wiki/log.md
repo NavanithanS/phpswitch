@@ -124,3 +124,7 @@ Valet: `doctor` warns when Valet is installed (check 9b) and recommends `valet u
 ## [2026-10-04] lint | Real minisign test re-publishes its signature
 
 On its first CI run, the real minisign round trip verified a good signature, but the "different key" half wasn't refused. `fake_url` had copied the original valid signature, so the re-signed file was never served. The test now calls `fake_url` again, and the gotcha is in [[concepts/testing]].
+
+## [2026-10-04] lint | Release signing key embedded
+
+The maintainer generated the minisign key pair. Its public key (`RWTRUA0k…`) is now `PHPSWITCH_MINISIGN_PUBKEY` in `config/defaults.sh`, so `tools/release.sh` can sign 2.0.0, and builds from here on verify signatures. `tests/08_update.bats` clears the key in setup; the signature tests set their own. Updated [[concepts/release-and-update]].

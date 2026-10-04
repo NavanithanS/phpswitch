@@ -9,6 +9,8 @@ setup() {
     common_setup
     load_modules
     PHPSWITCH_VERSION="1.4.5"
+    # Signature tests set their own key; the others test the checksum path
+    PHPSWITCH_MINISIGN_PUBKEY=""
 
     # A non-Homebrew install of phpswitch, first on PATH
     INSTALL_DIR="$TEST_ROOT/bin"
