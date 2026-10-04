@@ -11,6 +11,8 @@ sources: 0
 
 ## Releasing (`tools/release.sh`)
 
+Before running it, add the version's section to `CHANGELOG.md` (Keep a Changelog format) and commit it. Leave `PHPSWITCH_VERSION` alone: if it already equals the new version, the script skips the rebuild and the bump commit. `--generate-notes` produces only a PR list, so write the GitHub release notes from the CHANGELOG section and apply them with `gh release edit vX.Y.Z --notes-file`.
+
 1. Prompts for the new version (accepts `1.5.0` or `v1.5.0`; must be `X.Y.Z`).
 2. Writes it to `PHPSWITCH_VERSION` in `phpswitch/config/defaults.sh`, the single source of the version. Rebuilds, commits and pushes.
 3. Writes `php-switcher.sh.sha256` (`shasum -a 256` format; the file is gitignored).

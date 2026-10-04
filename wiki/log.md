@@ -132,3 +132,7 @@ The maintainer generated the minisign key pair. Its public key (`RWTRUA0k…`) i
 ## [2026-10-04] lint | README installs from the release, with checks
 
 The curl install downloaded `php-switcher.sh` from raw master, unverified. It now downloads the script, `.sha256` and `.minisig` from the latest release (`curl -fsSLO`, so an HTTP error fails instead of running an error page). It then shows `shasum -a 256 -c` and `minisign -Vm … -P <key>`. The Homebrew section explains `brew trust --tap navanithans/phpswitch` for Homebrew's tap-trust check. Updated [[concepts/release-and-update]] (the README holds a copy of the public key; installs up to 1.4.5 update from raw master).
+
+## [2026-10-04] lint | CHANGELOG and README for 2.0.0
+
+Added `CHANGELOG.md` (Keep a Changelog), with a 2.0.0 section covering the upgrade steps, breaking changes, and what was added, changed and fixed since 1.4.5; older releases link to GitHub Releases. The README's feature list now describes 2.0 (per-shell switching, doctor, completions, no automatic sudo, signed updates) and links the changelog. Its sample banner shows v2.0.0, and the flag list gained `--uninstall-auto-switch`, `--yes` and `--quiet`. AGENTS.md and [[concepts/release-and-update]] now say to write the CHANGELOG section before `release.sh` and not to bump the version by hand.
