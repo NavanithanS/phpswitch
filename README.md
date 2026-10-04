@@ -191,7 +191,7 @@ phpswitch --install-auto-switch
 
 This adds the `phpswitch init` line (see [Per-shell switching](#per-shell-switching-recommended)) to the rc file of your login shell (`$SHELL`), after making a backup. Each terminal then follows the project's PHP version when you `cd`, and other terminals, PHP-FPM and your IDE are unaffected.
 
-**Upgrading from 1.x:** the old auto-switch hook relinked PHP globally (and restarted PHP-FPM) on every `cd`. `--install-auto-switch` removes it from `.zshrc`, `.bashrc`, `.bash_profile`, `.profile` and `config.fish`, backing each file up first. If a block can't be identified safely, no file is changed and you're asked to remove it by hand. To change the global version (for PHP-FPM, Valet or your IDE), use `phpswitch global VERSION`.
+**Upgrading from 1.x:** the old auto-switch hook relinked PHP globally (and restarted PHP-FPM) on every `cd`. `--install-auto-switch` removes it from `.zshrc`, `.zprofile`, `.bashrc`, `.bash_profile`, `.bash_login`, `.profile` and `config.fish`, backing each file up first. If a block can't be identified safely, no file is changed and you're asked to remove it by hand. To change the global version (for PHP-FPM, Valet or your IDE), use `phpswitch global VERSION`.
 
 ### Managing extensions
 
