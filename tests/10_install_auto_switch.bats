@@ -241,3 +241,92 @@ RC
     [ ! -f "$HOME/.bashrc" ]
     grep -q "AUTO_SWITCH_PHP_VERSION=\"true\"" "$HOME/.phpswitch.conf"
 }
+
+# --- disabling (auto_uninstall) ---------------------------------------------
+
+@test "uninstall restores an rc file to its exact pre-install content" {
+    use_shell zsh
+    printf 'export A=1\nalias ll="ls -la"\n' > "$HOME/.zshrc"
+    before=$(sum "$HOME/.zshrc")
+    run auto_install
+    [ "$status" -eq 0 ]
+    printf 'AUTO_SWITCH_PHP_VERSION=true\n' > "$HOME/.phpswitch.conf"
+    run auto_uninstall
+    [ "$status" -eq 0 ]
+    [ "$(sum "$HOME/.zshrc")" = "$before" ]
+    grep -qx 'AUTO_SWITCH_PHP_VERSION="false"' "$HOME/.phpswitch.conf"
+    ls "$HOME"/.zshrc.bak.* >/dev/null
+    run auto_is_installed
+    [ "$status" -ne 0 ]
+}
+
+@test "uninstall removes integration and legacy hooks from every file" {
+    use_shell zsh
+    printf 'export A=1\n' > "$HOME/.zshrc"
+    run auto_install
+    [ "$status" -eq 0 ]
+    cp "$FIXTURES/legacy-32bad01-zsh.rc" "$HOME/.bashrc"
+    run auto_uninstall
+    [ "$status" -eq 0 ]
+    run grep -c 'PHPSwitch shell integration' "$HOME/.zshrc"
+    [ "$output" = "0" ]
+    run grep -c 'phpswitch_auto_detect_project' "$HOME/.bashrc"
+    [ "$output" = "0" ]
+    grep -q 'EDITOR' "$HOME/.bashrc"
+}
+
+@test "uninstall refuses a hand-edited line and changes no file" {
+    use_shell zsh
+    printf 'export A=1\n' > "$HOME/.zshrc"
+    run auto_install
+    [ "$status" -eq 0 ]
+    printf 'x\n# PHPSwitch shell integration\nexport SOMETHING_ELSE=1\n' > "$HOME/.bash_profile"
+    zsh_before=$(sum "$HOME/.zshrc")
+    bp_before=$(sum "$HOME/.bash_profile")
+    run auto_uninstall
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"No files were changed"* ]]
+    [ "$(sum "$HOME/.zshrc")" = "$zsh_before" ]
+    [ "$(sum "$HOME/.bash_profile")" = "$bp_before" ]
+}
+
+@test "uninstall with nothing installed changes nothing" {
+    printf 'export A=1\n' > "$HOME/.zshrc"
+    before=$(sum "$HOME/.zshrc")
+    run auto_uninstall
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"No PHPSwitch auto-switching found"* ]]
+    [ "$(sum "$HOME/.zshrc")" = "$before" ]
+}
+
+@test "menu: Disable removes the hook even when the config flag says false" {
+    use_shell zsh
+    printf 'export A=1\n' > "$HOME/.zshrc"
+    run auto_install
+    [ "$status" -eq 0 ]
+    AUTO_SWITCH_PHP_VERSION=false
+    run cmd_configure_auto_switch <<< "y"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"currently enabled"* ]]
+    run grep -c 'PHPSwitch shell integration' "$HOME/.zshrc"
+    [ "$output" = "0" ]
+}
+
+@test "config menu: Enter on auto-switching keeps the hook; n removes it" {
+    use_shell zsh
+    # core_load_config would install phpswitch's EXIT trap inside bats
+    utils_setup_temp_cleanup_trap() { :; }
+    printf 'export A=1\n' > "$HOME/.zshrc"
+    run auto_install
+    [ "$status" -eq 0 ]
+    run cmd_configure_phpswitch <<< $'5\n\nn'
+    [ "$status" -eq 0 ]
+    grep -qx '# PHPSwitch shell integration' "$HOME/.zshrc"
+    grep -qx 'AUTO_SWITCH_PHP_VERSION=true' "$HOME/.phpswitch.conf"
+
+    run cmd_configure_phpswitch <<< $'5\nn\nn'
+    [ "$status" -eq 0 ]
+    run grep -c 'PHPSwitch shell integration' "$HOME/.zshrc"
+    [ "$output" = "0" ]
+    grep -qx 'AUTO_SWITCH_PHP_VERSION=false' "$HOME/.phpswitch.conf"
+}

@@ -297,19 +297,14 @@ function cmd_configure_auto_switch {
     printf "  Automatically change PHP versions when entering a directory\n"
     printf "  containing a .php-version, composer.json, or .tool-versions file.\n\n"
 
-    # Check if auto-switching is enabled
-    if [ "$AUTO_SWITCH_PHP_VERSION" = "true" ]; then
+    # Judge by what the rc files contain, not the config flag (an
+    # integration line added before ~/.phpswitch.conf existed leaves it false)
+    if auto_is_installed; then
         utils_show_status "info" "Auto-switching is currently enabled"
 
-        printf "  Disable auto-switching? (y/n) "
+        printf "  Disable auto-switching? This removes it from your shell config (y/n) "
         if [ "$(utils_validate_yes_no "" "n")" = "y" ]; then
-            # Update config file
-            if [ -f "$HOME/.phpswitch.conf" ]; then
-                utils_set_config_value "AUTO_SWITCH_PHP_VERSION" "false" "$HOME/.phpswitch.conf"
-            fi
-            
-            utils_show_status "success" "Auto-switching disabled"
-            printf "  This change takes effect the next time you open a new terminal.\n"
+            auto_uninstall
         else
             # Offer to clear directory cache
             printf "  Clear the directory cache? (y/n) "
@@ -506,8 +501,13 @@ function cmd_configure_phpswitch {
             fi
             ;;
         5)
+            # The default must be y/n: the prompt echoes it back unchanged
+            local auto_default="n"
+            if auto_is_installed; then
+                auto_default="y"
+            fi
             printf "  Enable automatic PHP switching based on directory? (y/n) "
-            if [ "$(utils_validate_yes_no "" "$AUTO_SWITCH_PHP_VERSION")" = "y" ]; then
+            if [ "$(utils_validate_yes_no "" "$auto_default")" = "y" ]; then
                 AUTO_SWITCH_PHP_VERSION=true
                 
                 # Ask to set up per-shell switching if not already done
@@ -523,11 +523,18 @@ function cmd_configure_phpswitch {
                 if [ "$hook_exists" = "false" ]; then
                     printf "  Install shell hooks for auto-switching? (y/n) "
                     if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
-                        cmd_configure_auto_switch
+                        auto_install
                     else
                         utils_show_status "warning" "Auto-switching is enabled but shell hooks are not installed"
                         printf "  Run 'phpswitch --install-auto-switch' to install the hooks later.\n"
                     fi
+                fi
+            elif auto_is_installed; then
+                # Turning it off removes the hook; keep the setting on if that fails
+                if auto_uninstall; then
+                    AUTO_SWITCH_PHP_VERSION=false
+                else
+                    AUTO_SWITCH_PHP_VERSION=true
                 fi
             else
                 AUTO_SWITCH_PHP_VERSION=false

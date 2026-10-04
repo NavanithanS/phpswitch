@@ -214,6 +214,129 @@ function auto_install {
     return 0
 }
 
+# Every rc file holding the integration line written by auto_install
+function auto_integration_rc_files {
+    local f
+    for f in "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile" "$HOME/.config/fish/config.fish"; do
+        [ -f "$f" ] && grep -qxF "$AUTO_INIT_MARKER" "$f" 2>/dev/null && printf '%s\n' "$f"
+    done
+}
+
+# Whether phpswitch's auto-switching is in any rc file (v2 line or legacy hook)
+function auto_is_installed {
+    [ -n "$(auto_integration_rc_files)$(auto_legacy_rc_candidates)" ]
+}
+
+# Print stdin with each integration marker, the line after it and the blank
+# separator before it removed. Exit 2 (and print nothing usable) when the
+# line after a marker isn't a `... init <shell>` line written by auto_install.
+function auto_strip_init_lines {
+    awk -v marker="$AUTO_INIT_MARKER" '
+        { lines[NR] = $0 }
+        END {
+            n = 0
+            i = 1
+            while (i <= NR) {
+                if (lines[i] == marker) {
+                    next_line = lines[i + 1]
+                    if (i + 1 > NR || next_line !~ / init (zsh|bash|fish)/ ||
+                        (next_line !~ /eval/ && next_line !~ /\| source$/)) exit 2
+                    if (n > 0 && out[n] == "") n--
+                    i += 2
+                    continue
+                }
+                out[++n] = lines[i]
+                i++
+            }
+            for (k = 1; k <= n; k++) print out[k]
+        }
+    '
+}
+
+# Remove per-shell switching (and any legacy hook) from every rc file.
+# Every file is checked before anything is written: on any doubt, all files
+# stay byte-identical.
+function auto_uninstall {
+    local files=() f
+    while IFS= read -r f; do
+        [ -n "$f" ] && files+=("$f")
+    done < <({ auto_integration_rc_files; auto_legacy_rc_candidates; } | awk '!seen[$0]++')
+
+    if [ ${#files[@]} -eq 0 ]; then
+        utils_show_status "info" "No PHPSwitch auto-switching found in your shell config"
+        if [ -n "${PHPSWITCH_BIN:-}" ]; then
+            printf "  This shell loads it from a line you added yourself; remove the\n"
+            printf "  'phpswitch init' line from your shell config to turn it off.\n"
+        fi
+        return 0
+    fi
+
+    # 1. Build the new content of every file before changing any of them
+    local new_files=() content status failed=""
+    for f in "${files[@]}"; do
+        if [ ! -w "$f" ]; then
+            failed="$f (no write permission)"
+            break
+        fi
+        content=$(cat "$f") || { failed="$f (unreadable)"; break; }
+        if grep -q "phpswitch_auto_detect_project" "$f"; then
+            content=$(auto_strip_legacy_hooks "$f")
+            status=$?
+            if [ $status -ne 0 ]; then
+                failed="$f (older auto-switching block that can't be removed safely)"
+                break
+            fi
+        fi
+        if printf '%s\n' "$content" | grep -qxF "$AUTO_INIT_MARKER"; then
+            content=$(printf '%s\n' "$content" | auto_strip_init_lines)
+            status=$?
+            if [ $status -ne 0 ]; then
+                failed="$f (the line after '$AUTO_INIT_MARKER' isn't one phpswitch wrote)"
+                break
+            fi
+        fi
+        local tmp
+        tmp=$(utils_create_secure_temp_file) || { failed="$f (no temp file)"; break; }
+        printf '%s\n' "$content" > "$tmp"
+        new_files+=("$tmp")
+    done
+
+    if [ -n "$failed" ]; then
+        rm -f "${new_files[@]}"
+        utils_show_status "error" "Can't remove auto-switching from $failed"
+        printf "  No files were changed. Remove the PHPSwitch lines by hand, then run this again.\n"
+        return 1
+    fi
+
+    # 2. Back up and replace
+    local i
+    for i in "${!files[@]}"; do
+        f="${files[$i]}"
+        if ! auto_backup_rc "$f"; then
+            rm -f "${new_files[@]}"
+            utils_show_status "error" "Could not back up $f; it was left unchanged"
+            return 1
+        fi
+        if ! utils_replace_file_contents "$f" "${new_files[$i]}"; then
+            rm -f "${new_files[@]}"
+            utils_show_status "error" "Could not update $f; it was left unchanged"
+            return 1
+        fi
+        rm -f "${new_files[$i]}"
+        utils_show_status "success" "Removed auto-switching from $f"
+    done
+    rm -f "$HOME/.cache/phpswitch/directory_cache.txt" 2>/dev/null
+
+    if [ -f "$HOME/.phpswitch.conf" ]; then
+        utils_set_config_value "AUTO_SWITCH_PHP_VERSION" "false" "$HOME/.phpswitch.conf"
+    fi
+
+    printf "  New terminals no longer follow project PHP versions, and 'phpswitch use'\n"
+    printf "  is unavailable there; 'phpswitch global VERSION' still works.\n"
+    printf "  Shells that are already open keep it until they exit.\n"
+    return 0
+}
+
 # Function to clear auto-switching directory cache
 function auto_clear_directory_cache {
     local cache_file="$HOME/.cache/phpswitch/directory_cache.txt"
