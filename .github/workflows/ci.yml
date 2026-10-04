@@ -17,7 +17,7 @@ jobs:
 
       - name: Shellcheck
         # Modules are linted individually and as the built artifact (whole-program view).
-        # config/defaults.sh is covered via the artifact; tools/fix-permissions.sh is legacy and excluded.
+        # config/defaults.sh is covered via the artifact.
         run: |
           shellcheck -S warning \
             php-switcher.sh \

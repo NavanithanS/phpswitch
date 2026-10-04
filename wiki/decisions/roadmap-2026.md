@@ -53,7 +53,7 @@ The `sleep 1` loop in `core.sh:280-284` is a timeout guard for `brew search`, so
   - `05_shell.bats`: rc patching for zsh, bash and fish, including idempotency and backups.
   - `06_cli.bats`: flag dispatch, exit codes, `--help` and `--version`.
 - **GitHub Actions** (`.github/workflows/ci.yml`, `macos-latest`):
-  - shellcheck on an explicit file list: the built artifact (whole-program view), `lib/*.sh`, `build.sh`, `phpswitch.sh`, `tools/release.sh` and the fake brew. `tools/fix-permissions.sh` is excluded because of a pre-existing syntax error (see below).
+  - shellcheck on an explicit file list: the built artifact (whole-program view), `lib/*.sh`, `build.sh`, `phpswitch.sh`, `tools/release.sh` and the fake brew. (`tools/fix-permissions.sh` was excluded for a syntax error until it was deleted on 2026-10-04.)
   - `bats tests/`
   - Build sync check: run `./build.sh`, then `git diff --exit-code php-switcher.sh`. The build currently has no timestamps, so it is deterministic. Keep it that way.
 
@@ -134,10 +134,10 @@ Rough priority order. Confidence in brackets.
 
 | Found in | Issue | Location |
 |----------|-------|----------|
-| Phase 1 | Bash syntax error: a nested heredoc closes the outer one. The script is unused, since `--fix-permissions` lives in `commands.sh`. Delete it or repair it. | `tools/fix-permissions.sh:170` |
+| Phase 1 | ✅ Fixed 2026-10-04 (deleted). Bash syntax error: a nested heredoc closes the outer one. The script is unused, since `--fix-permissions` lives in `commands.sh`. Delete it or repair it. | `tools/fix-permissions.sh:170` |
 | Phase 1 | With FPM restart on, each auto-switch *starts* the target FPM service even if FPM wasn't running before. | `lib/auto-switch.sh:403-407` |
 | Phase 1 | ✅ Fixed 2026-10-04. The upward search stops at `$HOME` using a prefix match, so `/Users/bobby` counts as inside `/Users/bob`. | `lib/version.sh:53` |
-| Phase 2 | `release.sh` runs `git add .` when bumping the version, which could commit stray files. | `tools/release.sh` |
+| Phase 2 | ✅ Fixed 2026-10-04 (commits only `defaults.sh` and the artifact). `release.sh` runs `git add .` when bumping the version, which could commit stray files. | `tools/release.sh` |
 | Phase 2 | The README install command `curl`s from raw `master`, not a release asset. | `README.md:38` |
 | Phase 2 | The checksum is published by the same GitHub release as the script, so it doesn't protect against a compromised account. Consider minisign or `gh attestation`. | `lib/commands.sh` `cmd_update_self` |
 | Phase 3b | On macOS, bash login shells read `.bash_profile`, not `.bashrc`, where both the legacy hooks and the integration line are written. | `lib/auto-switch.sh` `auto_rc_file` |

@@ -81,10 +81,11 @@ else
     echo "🔨 Running build..."
     "$BUILD_SCRIPT" >/dev/null
     
-    # Commit version bump
+    # Commit only the version bump and the rebuilt artifact, never other
+    # working-tree or staged changes
     echo "💾 Committing version bump..."
-    git add .
-    git commit -m "chore: release v$NEW_VERSION"
+    git -C "$PROJECT_ROOT" add -- phpswitch/config/defaults.sh php-switcher.sh
+    git -C "$PROJECT_ROOT" commit -m "chore: release v$NEW_VERSION" -- phpswitch/config/defaults.sh php-switcher.sh
     git push origin HEAD
 fi
 
