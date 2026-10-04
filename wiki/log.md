@@ -136,3 +136,7 @@ The curl install downloaded `php-switcher.sh` from raw master, unverified. It no
 ## [2026-10-04] lint | CHANGELOG and README for 2.0.0
 
 Added `CHANGELOG.md` (Keep a Changelog), with a 2.0.0 section covering the upgrade steps, breaking changes, and what was added, changed and fixed since 1.4.5; older releases link to GitHub Releases. The README's feature list now describes 2.0 (per-shell switching, doctor, completions, no automatic sudo, signed updates) and links the changelog. Its sample banner shows v2.0.0, and the flag list gained `--uninstall-auto-switch`, `--yes` and `--quiet`. AGENTS.md and [[concepts/release-and-update]] now say to write the CHANGELOG section before `release.sh` and not to bump the version by hand.
+
+## [2026-10-04] lint | 2.0.0 released; one-way branch flow
+
+v2.0.0 was released with `tools/release.sh` from `release`. Its assets verify (checksum, and minisign with trusted comment `phpswitch v2.0.0`), and `releases/latest` is `v2.0.0`. The maintainer's rule: branches flow one way, master → `release`, never back. The CHANGELOG commit and the version bump were therefore re-applied to master as new commits. Master's `php-switcher.sh` is byte-identical to the signed asset, and installs on 1.4.5, which update from raw master only when the version differs, can now reach 2.0.0. The formula gained the `completions` line. AGENTS.md and [[concepts/release-and-update]] now say to run `release.sh` on master and then merge master into `release`.

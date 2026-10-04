@@ -24,6 +24,7 @@ This repository includes a structured wiki in the `wiki/` directory that serves 
 - CI (`.github/workflows/ci.yml`) runs shellcheck, the build-sync check and `bats tests/` on macOS. See `wiki/concepts/testing.md`.
 
 ## 5. Releases
+- Branches flow one way: master → `release`. Never merge `release` into master. Run `tools/release.sh` on master, so the version bump commit lands there, then merge master into `release`.
 - Before releasing, add the version's section to `CHANGELOG.md` and commit it. Don't change `PHPSWITCH_VERSION` by hand: `release.sh` bumps it, and it skips the bump commit if the version is already set.
 - Always release with `tools/release.sh`. It bumps `PHPSWITCH_VERSION` in `config/defaults.sh`, creates a `vX.Y.Z` tag, and uploads `php-switcher.sh` together with `php-switcher.sh.sha256`, then patches the Homebrew formula.
 - `phpswitch --update` **refuses** any release that doesn't include `php-switcher.sh.sha256`, so never create releases by hand without it.

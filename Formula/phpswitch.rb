@@ -1,12 +1,13 @@
 class Phpswitch < Formula
   desc "PHP Version Manager for macOS"
   homepage "https://github.com/NavanithanS/phpswitch"
-  url "https://github.com/NavanithanS/phpswitch/archive/refs/tags/v1.4.4.tar.gz"
-  sha256 "66d0b3b9631ae12adc9b6b6511b0f3bc1268807d13b1b7270ea7fcb549607e25"
+  url "https://github.com/NavanithanS/phpswitch/archive/refs/tags/v2.0.0.tar.gz"
+  sha256 "9d4cbdb50a87cc1748c978507b97cd92b55c0b30f741992c273ecf14aa3d5f24"
   license "MIT"
 
   def install
     bin.install "php-switcher.sh" => "phpswitch"
+    generate_completions_from_executable(bin/"phpswitch", "completions")
   end
 
   test do
