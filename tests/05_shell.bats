@@ -29,7 +29,8 @@ update_rc() {
     [ "$output" = "$HOME/.zshrc" ]
     [ -f "$HOME/.zshrc" ]
     run shell_get_rc_file bash
-    [ "$output" = "$HOME/.bashrc" ]
+    [ "$output" = "$HOME/.bash_profile" ]
+    [ -f "$HOME/.bash_profile" ]
     run shell_get_rc_file fish
     [ "$output" = "$HOME/.config/fish/config.fish" ]
     [ -f "$HOME/.config/fish/config.fish" ]
@@ -66,9 +67,9 @@ update_rc() {
 
 @test "php@default maps to the unversioned php prefix" {
     use_shell bash
-    touch "$HOME/.bashrc"
+    touch "$HOME/.bash_profile"
     update_rc php@default
-    grep -qF "$FAKE_BREW_PREFIX/opt/php/bin" "$HOME/.bashrc"
+    grep -qF "$FAKE_BREW_PREFIX/opt/php/bin" "$HOME/.bash_profile"
 }
 
 @test "fish: block uses fish syntax" {
@@ -149,4 +150,83 @@ update_rc() {
     update_rc php@8.1
     run awk '/^# BEGIN PHPSWITCH/,/^# END PHPSWITCH/' "$HOME/.zshrc"
     [[ "$output" =~ "opt/php@8.1/bin" ]]
+}
+
+# --- bash startup file selection (macOS login shells skip .bashrc) ---------
+
+# fake_uname <name>: make `uname -s` report <name>
+fake_uname() {
+    mkdir -p "$TEST_ROOT/uname-bin"
+    printf '#!/bin/sh\necho %s\n' "$1" > "$TEST_ROOT/uname-bin/uname"
+    chmod +x "$TEST_ROOT/uname-bin/uname"
+    PATH="$TEST_ROOT/uname-bin:$PATH"
+}
+
+@test "macOS bash: .bashrc alone is not read, so .bash_profile is used" {
+    fake_uname Darwin
+    touch "$HOME/.bashrc"
+    run shell_bash_rc_file ""
+    [ "$output" = "$HOME/.bash_profile" ]
+}
+
+@test "macOS bash: .bash_profile that sources .bashrc selects .bashrc" {
+    fake_uname Darwin
+    touch "$HOME/.bashrc"
+    printf 'export A=1\n[ -f ~/.bashrc ] && . ~/.bashrc\n' > "$HOME/.bash_profile"
+    run shell_bash_rc_file ""
+    [ "$output" = "$HOME/.bashrc" ]
+    printf 'source "$HOME/.bashrc"\n' > "$HOME/.bash_profile"
+    run shell_bash_rc_file ""
+    [ "$output" = "$HOME/.bashrc" ]
+}
+
+@test "macOS bash: a commented-out .bashrc source does not count" {
+    fake_uname Darwin
+    touch "$HOME/.bashrc"
+    printf '# . ~/.bashrc\n' > "$HOME/.bash_profile"
+    run shell_bash_rc_file ""
+    [ "$output" = "$HOME/.bash_profile" ]
+}
+
+@test "macOS bash: existing .bash_login or .profile is never shadowed" {
+    fake_uname Darwin
+    touch "$HOME/.bashrc" "$HOME/.profile"
+    run shell_bash_rc_file ""
+    [ "$output" = "$HOME/.profile" ]
+    touch "$HOME/.bash_login"
+    run shell_bash_rc_file ""
+    [ "$output" = "$HOME/.bash_login" ]
+    [ ! -e "$HOME/.bash_profile" ]
+}
+
+@test "bash: a file that already has phpswitch's content is kept" {
+    fake_uname Darwin
+    printf '%s\n' "$BEGIN_MARKER" > "$HOME/.bashrc"
+    touch "$HOME/.bash_profile"
+    run shell_bash_rc_file "# BEGIN PHPSWITCH MANAGED BLOCK"
+    [ "$output" = "$HOME/.bashrc" ]
+}
+
+@test "non-macOS bash keeps the .bashrc-first order" {
+    fake_uname Linux
+    touch "$HOME/.bashrc" "$HOME/.bash_profile"
+    run shell_bash_rc_file ""
+    [ "$output" = "$HOME/.bashrc" ]
+    rm "$HOME/.bashrc"
+    run shell_bash_rc_file ""
+    [ "$output" = "$HOME/.bash_profile" ]
+}
+
+@test "existing integration line in .bashrc is found again, not duplicated" {
+    fake_uname Darwin
+    use_shell bash
+    printf '\n# PHPSwitch shell integration\n[ -x /x ] && eval "$(/x init bash)"\n' > "$HOME/.bashrc"
+    touch "$HOME/.bash_profile"
+    run auto_rc_file bash
+    [ "$output" = "$HOME/.bashrc" ]
+    run auto_install
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"already set up"* ]]
+    run grep -c '# PHPSwitch shell integration' "$HOME/.bash_profile"
+    [ "$output" = "0" ]
 }

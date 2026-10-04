@@ -100,7 +100,7 @@ sum() {
 }
 
 @test "legacy blocks from every released installer are migrated" {
-    local fixture sh rc
+    local fixture sh rc target
     for fixture in "$FIXTURES"/legacy-*.rc; do
         sh=$(basename "$fixture" .rc); sh=${sh##*-}
         use_shell "$sh"
@@ -114,8 +114,11 @@ sum() {
         [ "$output" = "0" ] || { echo "legacy hook left in $fixture"; return 1; }
         grep -q 'EDITOR' "$rc"
         grep -qx 'alias after_block=1' "$rc"
-        grep -qx '# PHPSwitch shell integration' "$rc"
-        rm -f "$rc" "$rc".bak.*
+        # macOS bash: a .bashrc nothing loads gets no integration line;
+        # it goes to the login file instead
+        target=$(auto_rc_file "$sh")
+        grep -qx '# PHPSwitch shell integration' "$target"
+        rm -f "$rc" "$rc".bak.* "$target"
     done
 }
 

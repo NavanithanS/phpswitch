@@ -16,15 +16,7 @@ AUTO_LEGACY_MAX_LINES=100
 function auto_rc_file {
     case "$1" in
         zsh) printf '%s\n' "$HOME/.zshrc" ;;
-        bash)
-            if [ -f "$HOME/.bashrc" ]; then
-                printf '%s\n' "$HOME/.bashrc"
-            elif [ -f "$HOME/.bash_profile" ]; then
-                printf '%s\n' "$HOME/.bash_profile"
-            else
-                printf '%s\n' "$HOME/.bashrc"
-            fi
-            ;;
+        bash) shell_bash_rc_file "$AUTO_INIT_MARKER" ;;
         fish) printf '%s\n' "$HOME/.config/fish/config.fish" ;;
         *) return 1 ;;
     esac

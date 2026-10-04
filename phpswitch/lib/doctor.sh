@@ -129,7 +129,7 @@ function doctor_run {
 
     # 6b. PHP PATH entries in rc files that phpswitch doesn't manage
     local rc unmanaged
-    for rc in "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" "$HOME/.config/fish/config.fish"; do
+    for rc in "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile" "$HOME/.config/fish/config.fish"; do
         [ -f "$rc" ] || continue
         unmanaged=$(awk '
             /^# BEGIN PHPSWITCH MANAGED BLOCK/ { inside = 1; next }

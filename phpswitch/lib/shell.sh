@@ -44,6 +44,53 @@ function shell_detect_shell {
     fi
 }
 
+# Bash startup file that the user's terminals actually read.
+# $1: fixed string marking phpswitch's own content; a file that already
+# contains it is kept, so existing setups never get a second copy.
+# On macOS, Terminal starts login shells, which read only the first of
+# .bash_profile, .bash_login and .profile (never .bashrc). An existing
+# login file is never shadowed by creating .bash_profile.
+function shell_bash_rc_file {
+    local marker="$1" f login=""
+    if [ -n "$marker" ]; then
+        for f in .bashrc .bash_profile .bash_login .profile; do
+            if [ -f "$HOME/$f" ] && grep -qF -- "$marker" "$HOME/$f" 2>/dev/null; then
+                printf '%s\n' "$HOME/$f"
+                return 0
+            fi
+        done
+    fi
+
+    if [ "$(uname -s 2>/dev/null)" != "Darwin" ]; then
+        if [ -f "$HOME/.bashrc" ]; then
+            printf '%s\n' "$HOME/.bashrc"
+        elif [ -f "$HOME/.bash_profile" ]; then
+            printf '%s\n' "$HOME/.bash_profile"
+        elif [ -f "$HOME/.profile" ]; then
+            printf '%s\n' "$HOME/.profile"
+        else
+            printf '%s\n' "$HOME/.bashrc"
+        fi
+        return 0
+    fi
+
+    for f in .bash_profile .bash_login .profile; do
+        if [ -f "$HOME/$f" ]; then
+            login="$HOME/$f"
+            break
+        fi
+    done
+    if [ -z "$login" ]; then
+        printf '%s\n' "$HOME/.bash_profile"
+    elif [ -f "$HOME/.bashrc" ] &&
+         grep -qE '^[[:space:]]*[^#]*(\.|source)[[:space:]]+[^#]*\.bashrc' "$login" 2>/dev/null; then
+        # The login file loads .bashrc, which also covers non-login shells
+        printf '%s\n' "$HOME/.bashrc"
+    else
+        printf '%s\n' "$login"
+    fi
+}
+
 # Function to determine the most appropriate RC file for the shell
 function shell_get_rc_file {
     local shell_type="$1"
@@ -62,18 +109,8 @@ function shell_get_rc_file {
             fi
             ;;
         "bash")
-            # For bash, try multiple files in order of preference
-            if [ -f "$HOME/.bashrc" ]; then
-                rc_file="$HOME/.bashrc"
-            elif [ -f "$HOME/.bash_profile" ]; then
-                rc_file="$HOME/.bash_profile"
-            elif [ -f "$HOME/.profile" ]; then
-                rc_file="$HOME/.profile"
-            else
-                # Use .bashrc as default
-                rc_file="$HOME/.bashrc"
-                touch "$rc_file" # Create if it doesn't exist
-            fi
+            rc_file=$(shell_bash_rc_file "# BEGIN PHPSWITCH MANAGED BLOCK")
+            [ -f "$rc_file" ] || touch "$rc_file" # Create if it doesn't exist
             ;;
         "fish")
             # For fish, use config.fish
