@@ -140,7 +140,7 @@ Rough priority order. Confidence in brackets.
 | Phase 2 | ✅ Fixed 2026-10-04 (commits only `defaults.sh` and the artifact). `release.sh` runs `git add .` when bumping the version, which could commit stray files. | `tools/release.sh` |
 | Phase 2 | The README install command `curl`s from raw `master`, not a release asset. | `README.md:38` |
 | Phase 2 | The checksum is published by the same GitHub release as the script, so it doesn't protect against a compromised account. Consider minisign or `gh attestation`. | `lib/commands.sh` `cmd_update_self` |
-| Phase 3b | On macOS, bash login shells read `.bash_profile`, not `.bashrc`, where both the legacy hooks and the integration line are written. | `lib/auto-switch.sh` `auto_rc_file` |
+| Phase 3b | ✅ Fixed 2026-10-04 (`shell_bash_rc_file`). On macOS, bash login shells read `.bash_profile`, not `.bashrc`, where both the legacy hooks and the integration line are written. | `lib/auto-switch.sh` `auto_rc_file` |
 | Phase 4 | ✅ Fixed 2026-10-04. A full-patch `.php-version` such as `8.2.10` (phpenv style) normalizes to `php@8.2.10`, which never matches an install. It should map to `php@8.2`. | `lib/version.sh` `version_check_project` |
 | Phase 3a | The menu's "Disable auto-switching" only flips the config value. The legacy rc hook keeps running. | `lib/commands.sh` auto-switch menu |
 | Phase 1 | `--auto-mode` uses the fixed lock path `/tmp/phpswitch_<uid>.lock`, so tests share it with the real hook. | `phpswitch.sh`, build main block |

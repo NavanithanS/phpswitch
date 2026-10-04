@@ -16,8 +16,16 @@ PHPSwitch modifies the user's shell config files to export the correct `PATH` fo
 | Shell | Config file |
 |-------|------------|
 | zsh | `~/.zshrc` |
-| bash | `~/.bashrc` |
+| bash | From `shell_bash_rc_file` (see below) |
 | fish | `~/.config/fish/config.fish` |
+
+### Bash on macOS
+
+Terminal starts **login** shells, and login bash reads only the first of `.bash_profile`, `.bash_login` and `.profile`, never `.bashrc`. `shell_bash_rc_file` (used for both the managed PATH block and the integration line) therefore picks:
+
+1. Any bash startup file that already contains phpswitch's own content (the managed block or the integration marker), so existing setups never get a second copy.
+2. On macOS: the first existing login file. If that file sources `.bashrc` (an uncommented `. …bashrc` or `source …bashrc` line), `.bashrc` instead, since it then covers non-login shells too. With no login file at all, `.bash_profile` is created. An existing `.bash_login` or `.profile` is never shadowed by creating `.bash_profile`.
+3. Elsewhere: `.bashrc`, `.bash_profile`, `.profile`, else a new `.bashrc`.
 
 ## What gets written
 

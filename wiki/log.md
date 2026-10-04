@@ -76,3 +76,7 @@ From hands-on testing: an unchanged `global`/`--switch` no longer restarts PHP-F
 ## [2026-10-04] lint | Project version detection fixes
 
 A full-patch `.php-version` (`8.2.10`, `php@8.2.10`) now resolves to `php@8.2` instead of a version that never exists. The upward search compares whole path components, so a sibling such as `/Users/bobby` is no longer treated as inside `/Users/bob`; the binary and both hooks changed together. Updated [[concepts/version-format]], [[concepts/shell-integration]] and the issue table in [[decisions/roadmap-2026]].
+
+## [2026-10-04] lint | macOS bash startup file
+
+Bash on macOS starts login shells that never read `.bashrc`, yet both the managed PATH block and the integration line went there first. Added `shell_bash_rc_file`, shared by `shell_get_rc_file` and `auto_rc_file`: it keeps any file that already holds phpswitch content, otherwise picks the login file (or `.bashrc` when the login file sources it) and never shadows `.bash_login`/`.profile`. `doctor` now also scans `.bash_login`. Updated [[concepts/shell-patching]], [[concepts/shell-integration]], AGENTS.md and [[decisions/roadmap-2026]].

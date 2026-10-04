@@ -52,7 +52,7 @@ Leaving a project removes the per-shell entry, so the global version shows throu
 
 ## Installing and migrating (`--install-auto-switch` → `auto_install`)
 
-- **Target rc file:** chosen from the **login shell** (`$SHELL`): `.zshrc`, `.bashrc` (or `.bash_profile` if only that exists), or `config.fish`. `auto_login_shell` is the strict form: it fails for unsupported shells instead of guessing.
+- **Target rc file:** chosen from the **login shell** (`$SHELL`): `.zshrc`, the bash file from `shell_bash_rc_file` (on macOS the login file bash actually reads; see [[concepts/shell-patching]]), or `config.fish`. `auto_login_shell` is the strict form: it fails for unsupported shells instead of guessing.
 - **Written line:** `# PHPSwitch shell integration`, followed by `[ -x '<bin>' ] && eval "$('<bin>' init zsh)"` (fish: `test -x '<bin>'; and '<bin>' init fish | source`). The `# PHPSwitch shell integration` marker makes the install idempotent.
 - **Legacy hook:** `phpswitch_auto_detect_project`, written by 1.x. It calls `--auto-mode`, which relinks PHP globally and restarts FPM on `cd`. Migration:
   1. Collect every rc file that mentions it (`.zshrc`, `.bashrc`, `.bash_profile`, `.profile`, `config.fish`). Because of the `shell_detect_shell` bug, 1.x often wrote zsh users' hooks into `.bashrc`.
