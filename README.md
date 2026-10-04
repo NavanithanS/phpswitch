@@ -127,7 +127,7 @@ phpswitch --help, -h                 show this help
 Add one line to your shell config so each terminal can use its own PHP version:
 
 ```bash
-# ~/.zshrc  (use "init bash" in ~/.bashrc)
+# ~/.zshrc  (bash: "init bash" in ~/.bash_profile on macOS, ~/.bashrc elsewhere)
 eval "$(phpswitch init zsh)"
 
 # ~/.config/fish/config.fish
@@ -144,12 +144,14 @@ phpswitch local 8.3    # write .php-version here
 
 When you `cd`, the current shell switches to the project's PHP version (`.php-version`, `composer.json`, `.tool-versions`) and switches back when you leave. Other terminals, PHP-FPM and your IDE are not affected. Changes made by hand to `.php-version` take effect on the next `cd`.
 
+`phpswitch --install-auto-switch` adds this line for you (for bash on macOS, to the login file Terminal actually reads). To turn it off again, choose "Disable auto-switching" in the interactive menu (`a`): it removes the line, with a backup.
+
 ### Shell completions
 
 ```bash
 # ~/.zshrc (after compinit)
 eval "$(phpswitch completions zsh)"
-# ~/.bashrc
+# ~/.bash_profile (macOS) or ~/.bashrc
 eval "$(phpswitch completions bash)"
 # fish
 phpswitch completions fish > ~/.config/fish/completions/phpswitch.fish
