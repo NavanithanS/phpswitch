@@ -85,3 +85,34 @@ teardown() {
     [[ "$output" =~ "Reinstallation successful" ]]
     [ "$(wc -l < "$restarts" | tr -d ' ')" = "1" ]
 }
+
+@test "auto_switch_php starts no PHP-FPM when none was running" {
+    AUTO_RESTART_PHP_FPM=true
+    printf 'php@8.1 stopped nava ~/Library/LaunchAgents/homebrew.mxcl.php@8.1.plist\n' > "$TEST_ROOT/services"
+    FAKE_BREW_SERVICES="$TEST_ROOT/services" run auto_switch_php php@8.2
+    [ "$status" -eq 0 ]
+    grep -q '^link --force php@8.2$' "$FAKE_BREW_LOG"
+    run grep -E '^services (start|stop|restart)' "$FAKE_BREW_LOG"
+    [ "$status" -ne 0 ]
+}
+
+@test "auto_switch_php moves a running PHP-FPM to the new version" {
+    AUTO_RESTART_PHP_FPM=true
+    printf 'php@8.1 started nava ~/Library/LaunchAgents/homebrew.mxcl.php@8.1.plist\nphp@8.3 none\n' > "$TEST_ROOT/services"
+    FAKE_BREW_SERVICES="$TEST_ROOT/services" run auto_switch_php php@8.2
+    [ "$status" -eq 0 ]
+    grep -qx 'services stop php@8.1' "$FAKE_BREW_LOG"
+    grep -qx 'services start php@8.2' "$FAKE_BREW_LOG"
+    run grep -x 'services stop php@8.3' "$FAKE_BREW_LOG"
+    [ "$status" -ne 0 ]
+}
+
+@test "auto_switch_php restarts the target PHP-FPM when it is already running" {
+    AUTO_RESTART_PHP_FPM=true
+    printf 'php@8.2 started nava ~/Library/LaunchAgents/homebrew.mxcl.php@8.2.plist\n' > "$TEST_ROOT/services"
+    FAKE_BREW_SERVICES="$TEST_ROOT/services" run auto_switch_php php@8.2
+    [ "$status" -eq 0 ]
+    grep -qx 'services restart php@8.2' "$FAKE_BREW_LOG"
+    run grep -x 'services start php@8.2' "$FAKE_BREW_LOG"
+    [ "$status" -ne 0 ]
+}

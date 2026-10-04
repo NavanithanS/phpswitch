@@ -3,6 +3,8 @@
 #   FAKE_BREW_PREFIX  prefix reported by `brew --prefix` (required for link/unlink)
 #   FAKE_BREW_LIST    newline-separated formulae reported by `brew list`
 #   FAKE_BREW_LOG     if set, every invocation is appended to this file
+#   FAKE_BREW_SERVICES  if set, a file whose lines follow the
+#                       `brew services list` header (e.g. "php@8.1 started nava ...")
 # `brew search` mimics real output, including the "==> Formulae" header,
 # tap prefixes and installed markers.
 [ -n "$FAKE_BREW_LOG" ] && printf '%s\n' "$*" >> "$FAKE_BREW_LOG"
@@ -57,7 +59,10 @@ case "$1" in
         rm -f "$prefix/bin/php"
         ;;
     services)
-        [ "$2" = "list" ] && printf 'Name Status User File\n'
+        if [ "$2" = "list" ]; then
+            printf 'Name Status User File\n'
+            [ -n "$FAKE_BREW_SERVICES" ] && cat "$FAKE_BREW_SERVICES"
+        fi
         ;;
 esac
 exit 0

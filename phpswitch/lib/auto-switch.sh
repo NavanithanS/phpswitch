@@ -376,24 +376,25 @@ function auto_switch_php {
         return 1
     fi
 
-    # Silently restart PHP-FPM if enabled
+    # Move a running PHP-FPM over to the new version, if enabled. Only
+    # services that are actually started are touched: when no PHP-FPM was
+    # running, none is started.
     if [ "$AUTO_RESTART_PHP_FPM" = "true" ]; then
-        local service_name
+        local service_name running_services service
         service_name=$(fpm_get_service_name "$new_version")
-        # Capture once — avoids calling brew services list twice (slow) and eliminates TOCTOU
-        local services_list
-        services_list=$(brew services list 2>/dev/null)
-        local running_services
-        running_services=$(echo "$services_list" | grep -E "^php(@[0-9]\.[0-9])?" | awk '{print $1}')
-        while IFS= read -r service; do
-            [ -z "$service" ] && continue
-            [ "$service" != "$service_name" ] && brew services stop "$service" &>/dev/null
-        done <<< "$running_services"
-        # awk exact field match avoids "php" matching "php@8.1" etc.
-        if echo "$services_list" | awk -v svc="$service_name" '$1 == svc' | grep -q "started"; then
-            brew services restart "$service_name" &>/dev/null
-        else
-            brew services start "$service_name" &>/dev/null
+        # One `brew services list` call (slow); exact field matches avoid
+        # "php" matching "php@8.1"
+        running_services=$(brew services list 2>/dev/null |
+            awk '$1 ~ /^php(@[0-9]+\.[0-9]+)?$/ && $2 == "started" { print $1 }')
+        if [ -n "$running_services" ]; then
+            while IFS= read -r service; do
+                [ "$service" != "$service_name" ] && brew services stop "$service" &>/dev/null
+            done <<< "$running_services"
+            if printf '%s\n' "$running_services" | grep -qxF "$service_name"; then
+                brew services restart "$service_name" &>/dev/null
+            else
+                brew services start "$service_name" &>/dev/null
+            fi
         fi
     fi
 
