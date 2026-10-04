@@ -32,12 +32,38 @@ brew tap NavanithanS/phpswitch
 brew install phpswitch
 ```
 
-### Curl
+If Homebrew says the tap isn't trusted and ignores its formula, trust it once, then install again:
 
 ```bash
-curl -L https://raw.githubusercontent.com/NavanithanS/phpswitch/master/php-switcher.sh \
-  -o /tmp/php-switcher.sh && chmod +x /tmp/php-switcher.sh && /tmp/php-switcher.sh --install
+brew trust --tap navanithans/phpswitch
 ```
+
+### Curl
+
+Download the script from the latest release, with its checksum and signature:
+
+```bash
+cd "$(mktemp -d)"
+base=https://github.com/NavanithanS/phpswitch/releases/latest/download
+curl -fsSLO "$base/php-switcher.sh"
+curl -fsSLO "$base/php-switcher.sh.sha256"
+curl -fsSLO "$base/php-switcher.sh.minisig"
+```
+
+Check it before running it. The checksum catches a broken download. The [minisign](https://jedisct1.github.io/minisign/) signature (`brew install minisign`) proves the release was signed with the key below, the same key `phpswitch --update` checks every later update against:
+
+```bash
+shasum -a 256 -c php-switcher.sh.sha256
+minisign -Vm php-switcher.sh -P RWTRUA0kzfEK+o++c9IhgSQLUofuAG0+lzMgAtE6kwbZorv+II5wyU+k
+```
+
+Then install it:
+
+```bash
+chmod +x php-switcher.sh && ./php-switcher.sh --install
+```
+
+`phpswitch --update` does these checks itself (the signature check when minisign is installed).
 
 `--install` asks for your password only if the install directory isn't writable. Don't run the whole script with `sudo`: that leaves root-owned files in your home directory.
 

@@ -46,7 +46,8 @@ prompt → backup → install (existing copy/sudo logic)
 - **Exit status:** `--update` passes through the function's status, so a refused update exits non-zero.
 - **Symlinks:** Homebrew links with relative symlinks (`bin/phpswitch → ../Cellar/...`). `cmd_resolve_script_path` normalizes each hop with `cd`/`pwd` and caps the chain at 40 hops.
 - **Trust model:** the checksum comes from the same release as the script, so on its own it only protects against corruption and mismatched assets. The minisign signature is made with a key that never touches GitHub. An install that has the public key built in, and minisign installed, therefore rejects a release from a compromised GitHub account. Without minisign it falls back to the checksum and prints a warning (the user's choice, 2026-10-04). The public key (`RWTRUA0k…`) has been in `config/defaults.sh` since 2026-10-04. A build with an empty key skips the signature step.
-- **Key custody:** back up the secret key and its password. If the key is lost, every install that has minisign refuses all later updates. Rotating the key needs one release, signed with the old key, whose script embeds the new public key.
+- **Key custody:** back up the secret key and its password. If the key is lost, every install that has minisign refuses all later updates. Rotating the key needs one release, signed with the old key, whose script embeds the new public key. The README's manual-install section shows the public key too, so update it as well.
+- **Manual install:** the README downloads `php-switcher.sh`, `.sha256` and `.minisig` from `releases/latest/download/` and checks them with `shasum -a 256 -c` and `minisign -Vm`. Installs up to 1.4.5 update from raw master instead, so master must keep a current `php-switcher.sh`.
 
 ## Tests
 

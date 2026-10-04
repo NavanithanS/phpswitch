@@ -128,3 +128,7 @@ On its first CI run, the real minisign round trip verified a good signature, but
 ## [2026-10-04] lint | Release signing key embedded
 
 The maintainer generated the minisign key pair. Its public key (`RWTRUA0k…`) is now `PHPSWITCH_MINISIGN_PUBKEY` in `config/defaults.sh`, so `tools/release.sh` can sign 2.0.0, and builds from here on verify signatures. `tests/08_update.bats` clears the key in setup; the signature tests set their own. Updated [[concepts/release-and-update]].
+
+## [2026-10-04] lint | README installs from the release, with checks
+
+The curl install downloaded `php-switcher.sh` from raw master, unverified. It now downloads the script, `.sha256` and `.minisig` from the latest release (`curl -fsSLO`, so an HTTP error fails instead of running an error page). It then shows `shasum -a 256 -c` and `minisign -Vm … -P <key>`. The Homebrew section explains `brew trust --tap navanithans/phpswitch` for Homebrew's tap-trust check. Updated [[concepts/release-and-update]] (the README holds a copy of the public key; installs up to 1.4.5 update from raw master).
