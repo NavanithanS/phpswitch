@@ -3,7 +3,7 @@ title: Testing & CI
 category: concept
 tags: [testing, bats, ci, shellcheck]
 created: 2026-10-03
-updated: 2026-10-03
+updated: 2026-10-04
 sources: 0
 ---
 
@@ -48,6 +48,7 @@ Unit tests call module functions directly. CLI tests (`07_cli.bats`) run the bui
 - In bats, `! cmd` never fails a test. Use `run cmd; [ "$status" -ne 0 ]`.
 - Shell detection reports `bash` under bats. Override `shell_detect_shell` in the test to cover zsh and fish.
 - `core_get_installed_php_versions` memoizes `brew list` per process. Calls made through `run` (a subshell) are unaffected.
+- Tests that run a shell under `env -i PATH="$BASE_PATH"` only find binaries in `/usr/bin` and `/bin`. Resolve Homebrew tools such as fish with `command -v` first and call them by absolute path, otherwise `env` exits 127 with no visible output.
 
 ## CI
 

@@ -88,3 +88,7 @@ The menu's "Disable auto-switching" only set `AUTO_SWITCH_PHP_VERSION=false`, wh
 ## [2026-10-04] lint | Legacy auto-switch no longer starts PHP-FPM
 
 `auto_switch_php` started the target PHP-FPM on every project `cd` even when none was running. It now only moves an FPM that is actually `started`. The fake `brew` gained `FAKE_BREW_SERVICES`. Updated [[concepts/fpm-management]] and [[decisions/roadmap-2026]]. Possibly the same issue remains on the global switch path in `lib/fpm.sh` (not yet checked).
+
+## [2026-10-04] lint | Fish runtime test now actually runs fish
+
+The first CI run of `fish: hook detects project versions inside HOME only` failed with exit 127: under `env -i PATH="$BASE_PATH"`, `env` couldn't find Homebrew's fish. The test now resolves fish with `command -v` and runs it by absolute path. Added the gotcha to [[concepts/testing]].

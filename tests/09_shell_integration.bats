@@ -275,14 +275,15 @@ hook_dir() {
 }
 
 @test "fish: hook detects project versions inside HOME only" {
-    command -v fish >/dev/null || skip "fish not installed"
+    local fish_bin
+    fish_bin="$(command -v fish)" || skip "fish not installed"
     "$BIN" init fish > "$TEST_ROOT/init.fish"
     echo "8.2" > "$PROJECT/.php-version"
     mkdir -p "${HOME}x"
     echo "8.3" > "${HOME}x/.php-version"
     run env -i HOME="$HOME" PATH="$BASE_PATH" FAKE_BREW_PREFIX="$FAKE_BREW_PREFIX" \
         FAKE_BREW_LIST="$FAKE_BREW_LIST" FAKE_BREW_LOG="$FAKE_BREW_LOG" \
-        fish --no-config -c "source '$TEST_ROOT/init.fish'
+        "$fish_bin" --no-config -c "source '$TEST_ROOT/init.fish'
 cd '$PROJECT/src'; set -l r (_phpswitch_detect); echo \"in=\$r\"
 cd '${HOME}x'; set -l r (_phpswitch_detect); echo \"out=\$r\""
     [ "$status" -eq 0 ]
