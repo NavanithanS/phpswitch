@@ -80,3 +80,7 @@ A full-patch `.php-version` (`8.2.10`, `php@8.2.10`) now resolves to `php@8.2` i
 ## [2026-10-04] lint | macOS bash startup file
 
 Bash on macOS starts login shells that never read `.bashrc`, yet both the managed PATH block and the integration line went there first. Added `shell_bash_rc_file`, shared by `shell_get_rc_file` and `auto_rc_file`: it keeps any file that already holds phpswitch content, otherwise picks the login file (or `.bashrc` when the login file sources it) and never shadows `.bash_login`/`.profile`. `doctor` now also scans `.bash_login`. Updated [[concepts/shell-patching]], [[concepts/shell-integration]], AGENTS.md and [[decisions/roadmap-2026]].
+
+## [2026-10-04] lint | Disable auto-switching removes the hook
+
+The menu's "Disable auto-switching" only set `AUTO_SWITCH_PHP_VERSION=false`, which nothing at shell startup reads, so the hook kept running. Added `auto_uninstall` (all-or-nothing removal of the integration line and legacy blocks, with backups) and made the menu judge the state from the rc files. Config option 5 also passed `true`/`false` as the prompt default, so pressing Enter turned the setting off; it now passes `y`/`n`. Updated [[concepts/shell-integration]], [[entities/lib-auto-switch]], AGENTS.md and [[decisions/roadmap-2026]].

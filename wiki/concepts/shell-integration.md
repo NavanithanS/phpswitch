@@ -62,6 +62,15 @@ Leaving a project removes the per-shell entry, so the global version shows throu
 - **Fixtures:** `tests/fixtures/legacy-<commit>-<shell>.rc` are the real output of the historical installers (v1.4.1 `bfc6fa9`, last 1.x `32bad01`), produced by sourcing those modules.
 - `--auto-mode` and `--clear-directory-cache` remain for users who haven't migrated.
 
+## Disabling (`auto_uninstall`)
+
+"Disable auto-switching" in the menu (main menu `a`, or answering no to config option 5) removes phpswitch from the shell config instead of only flipping `AUTO_SWITCH_PHP_VERSION`, which nothing at shell startup reads.
+
+- Whether auto-switching is on is judged by the rc files (`auto_is_installed`: the integration marker or a legacy hook in any of `.zshrc`, `.zprofile`, `.bashrc`, `.bash_profile`, `.bash_login`, `.profile`, `config.fish`), not by the config flag. The flag stays `false` when the line was installed before `~/.phpswitch.conf` existed.
+- From every such file it removes the marker, the `… init <shell>` line after it and the blank separator before it (`auto_strip_init_lines`), plus any legacy block (`auto_strip_legacy_hooks`). Uninstalling right after installing restores the file byte for byte.
+- Same rules as installing: every file's new content is built and validated first; if a line after the marker isn't an init line phpswitch wrote, a legacy block is unsafe, or a file isn't writable, **no file is changed**. Each file is backed up and replaced atomically.
+- Then the config flag is set to `false`. `phpswitch use` disappears with the hook in new terminals; `phpswitch global` keeps working. A line the user added by hand (no marker) is left alone, with instructions.
+
 ## See also
 
 - [[concepts/auto-switch]]
