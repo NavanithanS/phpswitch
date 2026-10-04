@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Version: 1.4.5
+# Version: 2.0.0
 # PHPSwitch - PHP Version Manager for macOS
 # This script helps switch between different PHP versions installed via Homebrew
 # and updates shell configuration files (.zshrc, .bashrc, etc.) accordingly
@@ -9,7 +9,7 @@
 # PHPSwitch Default Configuration
 # Contains default values for configuration
 
-PHPSWITCH_VERSION="1.4.5"
+PHPSWITCH_VERSION="2.0.0"
 
 # minisign public key that release assets are signed with (tools/release.sh).
 # A fixed value, never read from the config file or the environment. When
