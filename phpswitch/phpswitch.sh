@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Version: 1.4.5
+# Version: see PHPSWITCH_VERSION in config/defaults.sh
 # PHPSwitch - PHP Version Manager for macOS
 # This script helps switch between different PHP versions installed via Homebrew
 # and updates shell configuration files (.zshrc, .bashrc, etc.) accordingly
@@ -12,6 +12,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 if [ -d "$SCRIPT_DIR/lib" ]; then
     # Debug mode detection
     if [ "$1" = "--debug" ]; then
+        # shellcheck disable=SC2034
         DEBUG_MODE=true
         shift
     fi
@@ -25,11 +26,37 @@ if [ -d "$SCRIPT_DIR/lib" ]; then
     source "$SCRIPT_DIR/lib/fpm.sh"
     source "$SCRIPT_DIR/lib/extensions.sh"
     source "$SCRIPT_DIR/lib/auto-switch.sh"
+    source "$SCRIPT_DIR/lib/init.sh"
+    source "$SCRIPT_DIR/lib/completions.sh"
+    source "$SCRIPT_DIR/lib/doctor.sh"
+    source "$SCRIPT_DIR/lib/self-manage.sh"
+    source "$SCRIPT_DIR/lib/menu.sh"
     source "$SCRIPT_DIR/lib/commands.sh"
     
+    # REL-04: Serialize concurrent auto-switch invocations only.
+    # Auto-switch hooks can fire rapidly on quick directory changes; the lock
+    # prevents overlapping --auto-mode switches. Interactive and read-only
+    # commands are intentionally NOT locked, so they never block each other.
+    # The trap is set before core_load_config so the temp-cleanup trap it
+    # installs chains this rm rather than clobbering it.
+    if [ "$1" = "--auto-mode" ]; then
+        LOCKFILE="/tmp/phpswitch_$(id -u).lock"
+        # Atomic create; fails if the lockfile already exists
+        if ! ( set -o noclobber; echo "$$" > "$LOCKFILE" ) 2>/dev/null; then
+            _pid=$(cat "$LOCKFILE" 2>/dev/null)
+            if kill -0 "$_pid" 2>/dev/null; then
+                # Another auto-switch is in progress; stay silent and yield.
+                exit 0
+            fi
+            # Stale lock from a dead process: take it over.
+            echo "$$" > "$LOCKFILE"
+        fi
+        trap 'rm -f "$LOCKFILE"' EXIT INT TERM
+    fi
+
     # Load configuration
     core_load_config
-    
+
     # Parse command-line arguments and handle commands
     cmd_parse_arguments "$@"
 else

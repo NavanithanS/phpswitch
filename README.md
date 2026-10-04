@@ -32,12 +32,40 @@ brew tap NavanithanS/phpswitch
 brew install phpswitch
 ```
 
-### Curl
+If Homebrew says the tap isn't trusted and ignores its formula, trust it once, then install again:
 
 ```bash
-curl -L https://raw.githubusercontent.com/NavanithanS/phpswitch/master/php-switcher.sh \
-  -o /tmp/php-switcher.sh && chmod +x /tmp/php-switcher.sh && sudo /tmp/php-switcher.sh --install
+brew trust --tap navanithans/phpswitch
 ```
+
+### Curl
+
+Download the script from the latest release, with its checksum and signature:
+
+```bash
+cd "$(mktemp -d)"
+base=https://github.com/NavanithanS/phpswitch/releases/latest/download
+curl -fsSLO "$base/php-switcher.sh"
+curl -fsSLO "$base/php-switcher.sh.sha256"
+curl -fsSLO "$base/php-switcher.sh.minisig"
+```
+
+Check it before running it. The checksum catches a broken download. The [minisign](https://jedisct1.github.io/minisign/) signature (`brew install minisign`) proves the release was signed with the key below, the same key `phpswitch --update` checks every later update against:
+
+```bash
+shasum -a 256 -c php-switcher.sh.sha256
+minisign -Vm php-switcher.sh -P RWTRUA0kzfEK+o++c9IhgSQLUofuAG0+lzMgAtE6kwbZorv+II5wyU+k
+```
+
+Then install it:
+
+```bash
+chmod +x php-switcher.sh && ./php-switcher.sh --install
+```
+
+`phpswitch --update` does these checks itself (the signature check when minisign is installed).
+
+`--install` asks for your password only if the install directory isn't writable. Don't run the whole script with `sudo`: that leaves root-owned files in your home directory.
 
 ### Manual
 
@@ -45,7 +73,7 @@ curl -L https://raw.githubusercontent.com/NavanithanS/phpswitch/master/php-switc
 git clone https://github.com/NavanithanS/phpswitch.git
 cd phpswitch
 chmod +x php-switcher.sh
-sudo ./php-switcher.sh --install
+./php-switcher.sh --install
 ```
 
 ## Usage
@@ -91,7 +119,13 @@ PHPSwitch  PHP Version Manager for macOS  v1.4.5
 
 ```
 phpswitch                            interactive menu
-phpswitch --switch=VERSION           switch to version
+phpswitch use VERSION|auto           use a version in this shell only (needs shell integration)
+phpswitch global VERSION             switch the global (Homebrew-linked) version
+phpswitch local VERSION              write .php-version in the current directory
+phpswitch init zsh|bash|fish         print shell integration code
+phpswitch doctor                     check your PHP setup (read-only)
+phpswitch completions zsh|bash|fish  print shell completions
+phpswitch --switch=VERSION           switch to version (same as global)
 phpswitch --switch-force=VERSION     switch, installing if needed
 phpswitch --install=VERSION          install a version
 phpswitch --uninstall=VERSION        uninstall a version
@@ -103,8 +137,8 @@ phpswitch --project, -p              switch to project version
 phpswitch --clear-cache              clear cached data
 phpswitch --refresh-cache            refresh available versions cache
 phpswitch --fix-permissions          fix cache directory permissions
-phpswitch --install-auto-switch      enable directory-based auto-switching
-phpswitch --clear-directory-cache    clear auto-switching directory cache
+phpswitch --install-auto-switch      add per-shell switching to your rc file
+phpswitch --clear-directory-cache    clear legacy auto-switching cache
 phpswitch --check-dependencies       check system dependencies
 phpswitch --install                  install as a system command
 phpswitch --uninstall                remove from system
@@ -114,7 +148,42 @@ phpswitch --debug                    enable debug logging
 phpswitch --help, -h                 show this help
 ```
 
-### Switching versions
+### Per-shell switching (recommended)
+
+Add one line to your shell config so each terminal can use its own PHP version:
+
+```bash
+# ~/.zshrc  (bash: "init bash" in ~/.bash_profile on macOS, ~/.bashrc elsewhere)
+eval "$(phpswitch init zsh)"
+
+# ~/.config/fish/config.fish
+phpswitch init fish | source
+```
+
+Then:
+
+```bash
+phpswitch use 8.2      # this shell only
+phpswitch use auto     # back to directory-based selection
+phpswitch local 8.3    # write .php-version here
+```
+
+When you `cd`, the current shell switches to the project's PHP version (`.php-version`, `composer.json`, `.tool-versions`) and switches back when you leave. Other terminals, PHP-FPM and your IDE are not affected. Changes made by hand to `.php-version` take effect on the next `cd`.
+
+`phpswitch --install-auto-switch` adds this line for you (for bash on macOS, to the login file Terminal actually reads). To turn it off again, run `phpswitch --uninstall-auto-switch` or choose "Disable auto-switching" in the interactive menu (`a`): it removes the line, with a backup.
+
+### Shell completions
+
+```bash
+# ~/.zshrc (after compinit)
+eval "$(phpswitch completions zsh)"
+# ~/.bash_profile (macOS) or ~/.bashrc
+eval "$(phpswitch completions bash)"
+# fish
+phpswitch completions fish > ~/.config/fish/completions/phpswitch.fish
+```
+
+### Switching versions globally
 
 ```bash
 phpswitch --switch=8.3
@@ -131,6 +200,8 @@ PHPSwitch checks the following files (in order) when the menu opens or `--projec
 | `composer.json`  | `require.php`, e.g. `>=8.1`      |
 | `.tool-versions` | `php 8.2.x`                      |
 
+For `composer.json`, `config.platform.php` is used as an exact pin. Otherwise the `require.php` constraint (`^8.1`, `>=8.2 <8.4`, `^7.4 || ^8.0`, …) resolves to an installed version that satisfies it: the constraint's own first version if that's installed, else the lowest installed match.
+
 ```bash
 echo "8.1" > .php-version
 phpswitch -p        # switch to the project version
@@ -138,17 +209,15 @@ phpswitch -p        # switch to the project version
 
 ### Auto-switching
 
-Enable automatic PHP switching when you change directories:
+Set up per-shell switching in your shell config automatically:
 
 ```bash
 phpswitch --install-auto-switch
 ```
 
-Once enabled, opening a directory that contains a `.php-version` file automatically switches to that version. Uses a cache to avoid redundant checks.
+This adds the `phpswitch init` line (see [Per-shell switching](#per-shell-switching-recommended)) to the rc file of your login shell (`$SHELL`), after making a backup. Each terminal then follows the project's PHP version when you `cd`, and other terminals, PHP-FPM and your IDE are unaffected.
 
-```bash
-phpswitch --clear-directory-cache   # force rescan
-```
+**Upgrading from 1.x:** the old auto-switch hook relinked PHP globally (and restarted PHP-FPM) on every `cd`. `--install-auto-switch` removes it from `.zshrc`, `.zprofile`, `.bashrc`, `.bash_profile`, `.bash_login`, `.profile` and `config.fish`, backing each file up first. If a block can't be identified safely, no file is changed and you're asked to remove it by hand. To change the global version (for PHP-FPM or your IDE), use `phpswitch global VERSION`. With Laravel Valet, use `valet use VERSION` instead, so Valet's own PHP-FPM follows; `phpswitch doctor` warns when Valet is installed.
 
 ### Managing extensions
 
@@ -189,8 +258,13 @@ phpswitch/
     ├── version.sh        # version switching, install, uninstall
     ├── fpm.sh            # PHP-FPM service management
     ├── extensions.sh     # extension enable/disable
-    ├── auto-switch.sh    # directory-based auto-switching hooks
-    └── commands.sh       # CLI argument parsing and menu
+    ├── auto-switch.sh    # legacy directory-based auto-switching hooks
+    ├── init.sh           # per-shell integration (phpswitch init / use)
+    ├── completions.sh    # shell completions (phpswitch completions)
+    ├── doctor.sh         # read-only health checks (phpswitch doctor)
+    ├── self-manage.sh    # --install / --uninstall / --update
+    ├── menu.sh           # interactive menu and configuration screens
+    └── commands.sh       # CLI argument parsing and dispatch
 ```
 
 The root `php-switcher.sh` is the built single-file distributable. Edit the modules under `phpswitch/lib/` and run `./phpswitch/build.sh` to regenerate it.
@@ -228,10 +302,11 @@ brew install php@8.3   # try manually
 
 ### Auto-switching not working
 
-1. Run `phpswitch --install-auto-switch` to (re)install the shell hook
-2. Restart your terminal or source your shell config
-3. Check `AUTO_SWITCH_PHP_VERSION=true` in `~/.phpswitch.conf`
-4. Run `phpswitch --clear-directory-cache` to clear stale cache
+1. Run `phpswitch --install-auto-switch` to add the integration line (and remove any legacy hook)
+2. Open a new terminal, or `source` your shell config
+3. Check that `echo $PHPSWITCH_BIN` prints a path. If it doesn't, the `phpswitch init` line isn't being loaded. On macOS, bash login shells read `~/.bash_profile`, so source `~/.bashrc` from it.
+4. Make sure `phpswitch use` isn't pinning a version: `phpswitch use auto`
+5. A hand-edited `.php-version` takes effect on the next `cd`
 
 ### Debug mode
 

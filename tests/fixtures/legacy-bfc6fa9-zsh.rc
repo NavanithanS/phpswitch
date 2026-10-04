@@ -1,0 +1,70 @@
+export EDITOR=vim
+
+# PHPSwitch auto-switching
+function phpswitch_auto_detect_project() {
+    # Use a cache to avoid checking the same directories repeatedly
+    local cache_file="$HOME/.cache/phpswitch/directory_cache.txt"
+    local current_dir="$(pwd)"
+    local cache_hit=false
+    
+    # Create cache directory if it doesn't exist
+    mkdir -p "$(dirname "$cache_file")" 2>/dev/null
+    
+    # Check if the current directory is in the cache
+    if [ -f "$cache_file" ] && [ -r "$cache_file" ]; then
+        while IFS=: read -r dir version; do
+            if [ "$dir" = "$current_dir" ]; then
+                if [ -n "$version" ]; then
+                    # Silently run auto-switching command
+                    phpswitch --auto-mode > /dev/null 2>&1
+                fi
+                cache_hit=true
+                break
+            fi
+        done < "$cache_file"
+    fi
+    
+    # If not in cache, check for project file and add to cache
+    if [ "$cache_hit" = "false" ]; then
+        # Use a temporary file to avoid permission issues
+        local temp_cache_file=$(mktemp)
+        
+        # Copy existing cache if available
+        if [ -f "$cache_file" ] && [ -r "$cache_file" ]; then
+            cat "$cache_file" > "$temp_cache_file" 2>/dev/null
+        fi
+        
+        # Check for PHP version file
+        for file in ".php-version" ".phpversion" ".php"; do
+            if [ -f "$current_dir/$file" ]; then
+                # Store this in cache
+                echo "$current_dir:$(cat "$current_dir/$file" | tr -d '[:space:]')" >> "$temp_cache_file"
+                # Run phpswitch in auto mode
+                phpswitch --auto-mode > /dev/null 2>&1
+                
+                # Try to update the main cache file if writable
+                if [ -w "$(dirname "$cache_file")" ]; then
+                    mv "$temp_cache_file" "$cache_file" 2>/dev/null
+                fi
+                return
+            fi
+        done
+        
+        # No PHP version file found, add to cache with empty version
+        echo "$current_dir:" >> "$temp_cache_file"
+        
+        # Try to update the main cache file if writable
+        if [ -w "$(dirname "$cache_file")" ]; then
+            mv "$temp_cache_file" "$cache_file" 2>/dev/null
+        else
+            rm -f "$temp_cache_file" 2>/dev/null
+        fi
+    fi
+}
+
+# Add the hook to chpwd (when directory changes)
+autoload -U add-zsh-hook
+add-zsh-hook chpwd phpswitch_auto_detect_project
+
+# Run once when shell starts
+phpswitch_auto_detect_project

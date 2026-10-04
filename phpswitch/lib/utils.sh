@@ -159,9 +159,16 @@ function utils_cleanup_temp_files {
     TEMP_DIRS_TO_CLEANUP=()
 }
 
-# Security: Setup trap for automatic cleanup
+# Security: Setup trap for automatic cleanup (chains with existing traps)
 function utils_setup_temp_cleanup_trap {
-    trap 'utils_cleanup_temp_files; exit' INT TERM EXIT
+    local _existing_exit_trap
+    _existing_exit_trap=$(trap -p EXIT | sed "s/^trap -- '\(.*\)' EXIT$/\1/")
+    if [ -n "$_existing_exit_trap" ]; then
+        # shellcheck disable=SC2064
+        trap "utils_cleanup_temp_files; $_existing_exit_trap; exit" INT TERM EXIT
+    else
+        trap 'utils_cleanup_temp_files; exit' INT TERM EXIT
+    fi
 }
 
 # Function to print text with a smooth left-to-right RGB gradient
@@ -176,15 +183,16 @@ function utils_print_gradient {
         return
     fi
     local i=0
-    while [ $i -lt $len ]; do
+    local output=""
+    while [ "$i" -lt "$len" ]; do
         local char="${text:$i:1}"
         local r=$(( r1 + (r2 - r1) * i / (len - 1) ))
         local g=$(( g1 + (g2 - g1) * i / (len - 1) ))
         local b=$(( b1 + (b2 - b1) * i / (len - 1) ))
-        printf "\033[38;2;%d;%d;%dm%s" "$r" "$g" "$b" "$char"
+        output+=$(printf "\033[38;2;%d;%d;%dm%s" "$r" "$g" "$b" "$char")
         i=$(( i + 1 ))
     done
-    printf "\033[0m"
+    printf "%s\033[0m" "$output"
 }
 
 # Function to display success or error message with colors
@@ -211,11 +219,24 @@ function utils_show_status {
 
 # Function to validate yes/no response, with default value
 function utils_validate_yes_no {
-    local prompt="$1"
+    # $1 (prompt) is unused; $2 is the default answer
     local default="$2"
-    
+
+    # Non-interactive confirmation: honor the global --yes/-y flag (ARCH-04).
+    # Auto-answer with the prompt's default, falling back to "y".
+    if [ "${PHPSWITCH_YES:-false}" = "true" ]; then
+        echo "${default:-y}"
+        return 0
+    fi
+
     while true; do
-        read -r response
+        # EOF (no terminal / closed stdin): never loop; fall back to the
+        # default, or "n" so nothing is done without an explicit yes
+        if ! read -r response && [ -z "$response" ]; then
+            echo "${default:-n}"
+            return 0
+        fi
+
         
         # If empty and default provided, use default
         if [ -z "$response" ] && [ -n "$default" ]; then
@@ -262,274 +283,10 @@ function utils_validate_numeric_input {
     fi
 }
 
-# Function to help diagnose PATH issues
-function utils_diagnose_path_issues {
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "\n  "; utils_print_gradient "PATH Diagnostic" 192 132 252 103 232 249; printf "\n\n"
-    else
-        printf "\n  PATH Diagnostic\n\n"
-    fi
-
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "  "; utils_print_gradient "Current PATH:" 148 182 251 125 207 250; printf "\n"
-    else
-        printf "  Current PATH:\n"
-    fi
-    printf "%s" "$PATH" | tr ':' '\n' | nl | sed 's/^/  /'
-
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "\n  "; utils_print_gradient "PHP binaries in PATH:" 148 182 251 125 207 250; printf "\n"
-    else
-        printf "\n  PHP binaries in PATH:\n"
-    fi
-
-    local count=0
-    local old_IFS="$IFS"
-    IFS=:
-    for dir in $PATH; do
-        if [ -x "$dir/php" ]; then
-            count=$((count + 1))
-            local _ver _type
-            _ver=$("$dir/php" -v 2>/dev/null | head -n 1)
-            if [ -L "$dir/php" ]; then
-                _type="Symlink → $(readlink "$dir/php")"
-            else
-                _type="Direct binary"
-            fi
-            printf "  %d) %s/php\n" "$count" "$dir"
-            printf "     Version: %s\n" "${_ver:-could not determine}"
-            printf "     Type: %s\n\n" "$_type"
-        fi
-    done
-    IFS="$old_IFS"
-
-    if [ "$count" -eq 0 ]; then
-        utils_show_status "warning" "No PHP binaries found in PATH"
-    elif [ "$count" -gt 1 ]; then
-        utils_show_status "warning" "Multiple PHP binaries found in PATH. This may cause confusion."
-        printf "  The first one in the PATH will be used.\n"
-    fi
-    
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "\n  "; utils_print_gradient "Active PHP:" 148 182 251 125 207 250; printf "\n"
-    else
-        printf "\n  Active PHP:\n"
-    fi
-    which php
-    php -v | head -n 1
-
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "\n  "; utils_print_gradient "Expected PHP path for current version:" 148 182 251 125 207 250; printf "\n"
-    else
-        printf "\n  Expected PHP path for current version:\n"
-    fi
-    local current_version
-    current_version=$(core_get_current_php_version)
-    if [ "$current_version" = "php@default" ]; then
-        printf "  %s/opt/php/bin/php\n" "$HOMEBREW_PREFIX"
-    else
-        printf "  %s/opt/%s/bin/php\n" "$HOMEBREW_PREFIX" "$current_version"
-    fi
-    
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "\n  "; utils_print_gradient "Recommended actions:" 148 182 251 125 207 250; printf "\n"
-    else
-        printf "\n  Recommended actions:\n"
-    fi
-    printf "    1  Ensure the PHP version you want is first in your PATH\n"
-    printf "    2  Check for conflicting PHP binaries in your PATH\n"
-    printf "    3  Run 'hash -r' (bash/zsh) or 'rehash' (fish) to clear command hash table\n"
-    printf "    4  Open a new terminal session to ensure PATH changes take effect\n"
-}
-
-# Function to diagnose the PHP environment
-function utils_diagnose_php_environment {
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "\n  "; utils_print_gradient "PHP Environment Diagnostic" 192 132 252 103 232 249; printf "\n\n"
-    else
-        printf "\n  PHP Environment Diagnostic\n\n"
-    fi
-
-    # 1. Check all PHP binaries
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "  "; utils_print_gradient "PHP Binaries" 148 182 251 125 207 250; printf "\n"
-    else
-        printf "  PHP Binaries\n"
-    fi
-    if command -v php &>/dev/null; then
-        local php_path
-        php_path=$(which php)
-        printf "  Default PHP: %s\n" "$php_path"
-        if [ -L "$php_path" ]; then
-            local real_path
-            real_path=$(readlink "$php_path")
-            printf "    → Symlinked to: %s\n" "$real_path"
-        fi
-        printf "  Version: %s\n" "$(php -v | head -n 1)"
-    else
-        printf "  No PHP binary found in PATH\n"
-    fi
-    printf "\n"
-
-    # 2. Check all installed PHP versions
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "\n  "; utils_print_gradient "Installed PHP Versions" 148 182 251 125 207 250; printf "\n"
-    else
-        printf "\n  Installed PHP Versions\n"
-    fi
-    local installed_versions
-    installed_versions=$(core_get_installed_php_versions)
-    if [ -n "$installed_versions" ]; then
-        printf "%s\n" "$installed_versions"
-    else
-        printf "  No PHP versions installed via Homebrew\n"
-    fi
-    printf "\n"
-
-    # 3. Check Homebrew PHP links
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "\n  "; utils_print_gradient "Homebrew PHP Links" 148 182 251 125 207 250; printf "\n"
-    else
-        printf "\n  Homebrew PHP Links\n"
-    fi
-    if [ -d "$HOMEBREW_PREFIX/opt" ]; then
-        find "$HOMEBREW_PREFIX/opt" -maxdepth 1 -name '*php*' | sort | while IFS= read -r p; do
-            printf "  %s\n" "$p"
-        done
-    else
-        printf "  No Homebrew opt directory found\n"
-    fi
-    printf "\n"
-
-    # 4. Check for conflicting PHP binaries
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "\n  "; utils_print_gradient "PHP in PATH" 148 182 251 125 207 250; printf "\n"
-    else
-        printf "\n  PHP in PATH\n"
-    fi
-    local old_IFS="$IFS"
-    IFS=:
-    for dir in $PATH; do
-        if [ -x "$dir/php" ]; then
-            local _ver _type
-            _ver=$("$dir/php" -v 2>/dev/null | head -n 1)
-            if [ -L "$dir/php" ]; then
-                _type="Symlink → $(readlink "$dir/php")"
-            else
-                _type="Direct binary"
-            fi
-            printf "  Found in: %s/php\n" "$dir"
-            printf "    Version: %s\n" "${_ver:-could not determine}"
-            printf "    Type: %s\n" "$_type"
-        fi
-    done
-    IFS="$old_IFS"
-    printf "\n"
-
-    # 5. Check shell config files for PHP path entries
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "\n  "; utils_print_gradient "Shell Configuration Files" 148 182 251 125 207 250; printf "\n"
-    else
-        printf "\n  Shell Configuration Files\n"
-    fi
-    local shell_type
-    shell_type=$(shell_detect_shell)
-    local -a config_files
-    if [ "$shell_type" = "zsh" ]; then
-        config_files=("$HOME/.zshrc" "$HOME/.zprofile")
-    elif [ "$shell_type" = "bash" ]; then
-        config_files=("$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile")
-    elif [ "$shell_type" = "fish" ]; then
-        config_files=("$HOME/.config/fish/config.fish")
-    else
-        config_files=("$HOME/.profile")
-    fi
-
-    for file in "${config_files[@]}"; do
-        if [ -f "$file" ]; then
-            printf "  %s\n" "$file"
-            grep -n "PATH.*php" "$file" | sed 's/^/    /' || printf "    No PHP PATH entries found\n"
-        fi
-    done
-    printf "\n"
-    
-    # 6. Check PHP modules
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "\n  "; utils_print_gradient "Loaded PHP Modules" 148 182 251 125 207 250; printf "\n"
-    else
-        printf "\n  Loaded PHP Modules\n"
-    fi
-    if command -v php &>/dev/null; then
-        php -m | grep -v "\[" | sort | head -n 20
-        module_count=$(php -m | grep -v "\[" | wc -l)
-        if [ "$module_count" -gt 20 ]; then
-            echo "...and $(($module_count - 20)) more modules"
-        fi
-    else
-        echo "No PHP binary found to check modules"
-    fi
-    
-    
-    # 7. Check running PHP-FPM services
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "\n  "; utils_print_gradient "Running PHP-FPM Services" 148 182 251 125 207 250; printf "\n"
-    else
-        printf "\n  Running PHP-FPM Services\n"
-    fi
-    brew services list | grep -E "^php(@[0-9]\.[0-9])?" || echo "  No PHP services found"
-    echo ""
-    
-    # 8. Summary and recommendations
-    if [ "$USE_COLORS" = "true" ]; then
-        printf "\n  "; utils_print_gradient "Summary" 148 182 251 125 207 250; printf "\n"
-    else
-        printf "\n  Summary\n"
-    fi
-    if command -v php &>/dev/null; then
-        php_version=$(php -v | head -n 1 | cut -d " " -f 2)
-        homebrew_linked=$(core_get_current_php_version)
-        
-        local brew_major_minor
-        brew_major_minor=$(echo "$homebrew_linked" | grep -oE "[0-9]+\.[0-9]+")
-        if [[ "$homebrew_linked" == php@* ]] && [[ "$php_version" != *"$brew_major_minor"* ]]; then
-            utils_show_status "warning" "Version mismatch detected"
-            echo "  The PHP version in use ($php_version) does not match the Homebrew-linked version ($homebrew_linked)"
-            echo ""
-            echo "Possible causes:"
-            echo "  1. Another PHP binary is taking precedence in your PATH"
-            echo "  2. Shell configuration files need to be updated or sourced"
-            echo "  3. The PHP binary might be a direct install or from another package manager"
-            echo ""
-            echo "Recommended actions:"
-            shell_type=$(shell_detect_shell)
-            if [ "$shell_type" = "zsh" ]; then
-                echo "  1. Try running: source ~/.zshrc"
-                echo "  2. Or open a new terminal window"
-            elif [ "$shell_type" = "bash" ]; then
-                echo "  1. Try running: source ~/.bashrc"
-                echo "  2. Or open a new terminal window"
-            elif [ "$shell_type" = "fish" ]; then
-                echo "  1. Try running: source ~/.config/fish/config.fish"
-                echo "  2. Or run: set -gx PATH $HOMEBREW_PREFIX/opt/$homebrew_linked/bin $HOMEBREW_PREFIX/opt/$homebrew_linked/sbin \$PATH; and rehash"
-            else
-                echo "  1. Try running: source ~/.profile"
-                echo "  2. Or open a new terminal window"
-            fi
-            echo "  3. Consider removing or renaming conflicting PHP binaries"
-        else
-            utils_show_status "success" "PHP environment looks healthy"
-            echo "  Current PHP version: $php_version"
-            echo "  Homebrew-linked version: $homebrew_linked"
-        fi
-    else
-        utils_show_status "error" "No PHP binary found in PATH"
-        echo "  Check your Homebrew installation and PATH environment variable"
-    fi
-}
-
 # Function to validate system dependencies
 function utils_check_dependencies {
-    utils_show_status "info" "Checking dependencies..."
+    # Only problems are reported; a passing check prints nothing.
+    # ($1 "silent" is still accepted for callers.)
     
     # Check for Homebrew
     if ! command -v brew >/dev/null 2>&1; then
@@ -540,7 +297,8 @@ function utils_check_dependencies {
     fi
 
     # Check Homebrew version
-    local brew_version=$(brew --version | head -n 1 | grep -o "[0-9]\+\.[0-9]\+\.[0-9]\+" 2>/dev/null || echo "0.0.0")
+    local brew_version
+    brew_version=$(brew --version | head -n 1 | grep -o "[0-9]\+\.[0-9]\+\.[0-9]\+" 2>/dev/null || echo "0.0.0")
     local min_version="3.0.0"
     
     # Basic version comparison
@@ -580,7 +338,8 @@ function utils_check_dependencies {
     fi
     
     # Check for supported shell
-    local shell_type=$(shell_detect_shell)
+    local shell_type
+    shell_type=$(shell_detect_shell)
     if [ "$shell_type" = "unknown" ]; then
         utils_show_status "warning" "Unrecognized shell: $SHELL"
         echo "PHPSwitch works best with bash, zsh, or fish shells."
@@ -595,131 +354,116 @@ function utils_check_dependencies {
     fi
     
     # Check for write permissions in important directories
-    local brew_prefix="$(brew --prefix)"
+    local brew_prefix
+    brew_prefix="$(brew --prefix)"
     if [ ! -w "$brew_prefix/bin" ] && [ ! -w "/usr/local/bin" ]; then
         utils_show_status "warning" "Limited write permissions detected"
         echo "You may need to use sudo for some operations."
     fi
     
     # Enhanced cache directory check - using the core_get_cache_dir function
-    local cache_dir=$(core_get_cache_dir)
+    local cache_dir
+    cache_dir=$(core_get_cache_dir)
     
     # If the function returned a temporary directory, we've already fallen back
     if [[ "$cache_dir" == /tmp/* ]]; then
         utils_show_status "warning" "Using temporary cache directory: $cache_dir"
         echo "Cache will be lost on system reboot. To fix permanently, run:"
         echo "phpswitch --fix-permissions"
-        
-        # Try to create a more persistent cache directory for future use
-        local alt_cache="$HOME/.phpswitch_cache"
-        if [ ! -d "$alt_cache" ]; then
-            mkdir -p "$alt_cache" 2>/dev/null
-            if [ -d "$alt_cache" ] && [ -w "$alt_cache" ]; then
-                # Update config file for future runs
-                if [ -f "$HOME/.phpswitch.conf" ]; then
-                    utils_set_config_value "CACHE_DIRECTORY" "$alt_cache" "$HOME/.phpswitch.conf"
-                else
-                    # Create config file if it doesn't exist
-                    cat > "$HOME/.phpswitch.conf" << EOL
-# PHPSwitch Configuration
-AUTO_RESTART_PHP_FPM=true
-BACKUP_CONFIG_FILES=true
-DEFAULT_PHP_VERSION=""
-MAX_BACKUPS=5
-AUTO_SWITCH_PHP_VERSION=false
-CACHE_DIRECTORY="$alt_cache"
-EOL
-                fi
-            fi
-        fi
-    # If we're using the standard cache directory but it's not writable
     elif [ "$cache_dir" = "$HOME/.cache/phpswitch" ] && [ ! -w "$cache_dir" ]; then
         utils_show_status "warning" "Cache directory is not writable: $cache_dir"
-        printf "  This is a non-critical issue. PHPSwitch will use temporary directories instead.\n"
-        printf "  Fix the permissions now? (y/n) "
-        if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
-            # Check if we have the fix-permissions script
-            local script_dir="$(dirname "$(realpath "$0" 2>/dev/null || echo "$0")")"
-            local fix_script="$script_dir/tools/fix-permissions.sh"
-            
-            if [ -f "$fix_script" ]; then
-                utils_show_status "info" "Running permission fix script..."
-                bash "$fix_script"
-            else
-                # Try to fix permissions manually
-                utils_show_status "info" "Attempting to fix permissions manually..."
-                
-                # Try to fix with standard chmod first
-                chmod u+w "$cache_dir" 2>/dev/null
-                if [ ! -w "$cache_dir" ]; then
-                    # If that fails, try with sudo
-                    utils_show_status "info" "Trying with sudo..."
-                    sudo chmod u+w "$cache_dir" 2>/dev/null
-                    
-                    if [ ! -w "$cache_dir" ]; then
-                        # Try ownership change
-                        # Get secure username and validate it
-                        local username
-                        username="$(id -un)"
-                        if utils_validate_username "$username"; then
-                            sudo chown "$username" "$cache_dir" 2>/dev/null
-                        else
-                            utils_show_status "error" "Invalid username detected, skipping ownership change"
-                        fi
-                        
-                        if [ ! -w "$cache_dir" ]; then
-                            utils_show_status "error" "Could not fix permissions with standard methods"
-                            
-                            # Try to remove and recreate directory
-                            utils_show_status "info" "Trying to recreate the cache directory..."
-                            sudo rm -rf "$cache_dir" 2>/dev/null
-                            mkdir -p "$cache_dir" 2>/dev/null
-                            
-                            if [ ! -w "$cache_dir" ]; then
-                                # Create alternative directory
-                                local alt_cache="$HOME/.phpswitch_cache"
-                                mkdir -p "$alt_cache" 2>/dev/null
-                                
-                                if [ -d "$alt_cache" ] && [ -w "$alt_cache" ]; then
-                                    utils_show_status "success" "Created alternative cache directory: $alt_cache"
-                                    
-                                    # Update config file
-                                    if [ -f "$HOME/.phpswitch.conf" ]; then
-                                        utils_set_config_value "CACHE_DIRECTORY" "$alt_cache" "$HOME/.phpswitch.conf"
-                                    else
-                                        # Create config file if it doesn't exist
-                                        cat > "$HOME/.phpswitch.conf" << EOL
-# PHPSwitch Configuration
-AUTO_RESTART_PHP_FPM=true
-BACKUP_CONFIG_FILES=true
-DEFAULT_PHP_VERSION=""
-MAX_BACKUPS=5
-AUTO_SWITCH_PHP_VERSION=false
-CACHE_DIRECTORY="$alt_cache"
-EOL
-                                    fi
-                                else
-                                    utils_show_status "error" "Failed to create alternative cache directory"
-                                    echo "PHPSwitch will fall back to using temporary directories for this session."
-                                fi
-                            else
-                                utils_show_status "success" "Cache directory recreated successfully"
-                            fi
-                        else
-                            utils_show_status "success" "Permissions fixed by changing ownership"
-                        fi
-                    else
-                        utils_show_status "success" "Permissions fixed with sudo"
-                    fi
-                else
-                    utils_show_status "success" "Permissions fixed"
-                fi
-            fi
-        fi
+        printf "  Run 'phpswitch --fix-permissions' to resolve this.\n"
     fi
     
-    utils_show_status "success" "All critical dependencies satisfied"
     return 0
+}
+
+# CQ-07: Extracted permission-fix logic into its own function
+function utils_ensure_cache_writable {
+    local cache_dir="$1"
+    
+    if [ -w "$cache_dir" ]; then
+        return 0
+    fi
+    
+    utils_show_status "info" "Attempting to fix permissions for $cache_dir..."
+    
+    # Strategy 1: chmod
+    chmod u+w "$cache_dir" 2>/dev/null
+    if [ -w "$cache_dir" ]; then
+        utils_show_status "success" "Permissions fixed"
+        return 0
+    fi
+    
+    # Never escalate automatically; tell the user how to fix ownership
+    utils_show_status "warning" "$cache_dir is not writable (it may be owned by root)"
+    printf "  To fix it yourself, run:\n    sudo chown -R %s \"%s\"\n" "$(id -un)" "$cache_dir"
+    
+    # Strategy 5: Alternative directory
+    local alt_cache="$HOME/.phpswitch_cache"
+    mkdir -p "$alt_cache" 2>/dev/null
+    if [ -d "$alt_cache" ] && [ -w "$alt_cache" ]; then
+        utils_show_status "success" "Created alternative cache directory: $alt_cache"
+        if [ -f "$HOME/.phpswitch.conf" ]; then
+            utils_set_config_value "CACHE_DIRECTORY" "$alt_cache" "$HOME/.phpswitch.conf"
+        else
+            core_create_default_config
+            echo "CACHE_DIRECTORY=\"$alt_cache\"" >> "$HOME/.phpswitch.conf"
+        fi
+        return 0
+    fi
+    
+    utils_show_status "error" "All attempts to fix cache permissions failed"
+    echo "PHPSwitch will fall back to using temporary directories for this session."
+    return 1
+}
+
+# Resolve a path through any chain of symlinks (capped so a cycle can't hang)
+function utils_resolve_symlinks {
+    local path="$1"
+    local target hops=0
+    while [ -L "$path" ] && [ "$hops" -lt 40 ]; do
+        hops=$((hops + 1))
+        target=$(readlink "$path")
+        case "$target" in
+            /*) path="$target" ;;
+            # Relative targets (e.g. Homebrew's ../Cellar/...) are normalized via cd
+            *) path="$(cd "$(dirname "$path")/$(dirname "$target")" 2>/dev/null && pwd)/$(basename "$target")" ;;
+        esac
+    done
+    printf '%s\n' "$path"
+}
+
+# Atomically replace the contents of a file with those of $2.
+# Follows symlinks (dotfile managers stay intact) and keeps the file mode;
+# a failed write never leaves a truncated file behind.
+function utils_replace_file_contents {
+    local target="$1" source="$2"
+    local real
+    real=$(utils_resolve_symlinks "$target")
+    local tmp
+    tmp=$(mktemp "$(dirname "$real")/.phpswitch.XXXXXX") || return 1
+    if ! cat "$source" > "$tmp"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    if [ -e "$real" ]; then
+        chmod "$(stat -f '%Lp' "$real")" "$tmp" 2>/dev/null
+    fi
+    mv "$tmp" "$real" || { rm -f "$tmp"; return 1; }
+}
+
+# Run a command for an explicit user request (install/uninstall/update),
+# escalating with sudo only when the target directory isn't writable.
+function utils_run_for_dir {
+    local dir="$1"
+    shift
+    if [ -w "$dir" ]; then
+        "$@"
+    else
+        utils_show_status "info" "$dir is not writable; using sudo"
+        sudo "$@"
+    fi
 }
 
 # Function to compare semantic versions (returns true if version1 >= version2)
@@ -728,29 +472,126 @@ function utils_compare_versions {
     local version2="$2"
     
     # Extract major, minor, patch versions
-    local v1_parts=(${version1//./ })
-    local v2_parts=(${version2//./ })
+    IFS="." read -ra v1_parts <<< "$version1"
+    IFS="." read -ra v2_parts <<< "$version2"
     
     # Compare major version
-    if (( ${v1_parts[0]} > ${v2_parts[0]} )); then
+    if (( v1_parts[0] > v2_parts[0] )); then
         return 0
-    elif (( ${v1_parts[0]} < ${v2_parts[0]} )); then
+    elif (( v1_parts[0] < v2_parts[0] )); then
         return 1
     fi
     
     # Compare minor version
-    if (( ${v1_parts[1]} > ${v2_parts[1]} )); then
+    if (( v1_parts[1] > v2_parts[1] )); then
         return 0
-    elif (( ${v1_parts[1]} < ${v2_parts[1]} )); then
+    elif (( v1_parts[1] < v2_parts[1] )); then
         return 1
     fi
     
     # Compare patch version
-    if (( ${v1_parts[2]} >= ${v2_parts[2]} )); then
+    if (( v1_parts[2] >= v2_parts[2] )); then
         return 0
     else
         return 1
     fi
+}
+
+# Installed PHP series (X.Y), ascending, from the Homebrew prefix.
+# Uses a glob rather than `brew list`: this runs on cd via the shell hook.
+function utils_installed_php_series {
+    local d target
+    {
+        for d in "$HOMEBREW_PREFIX"/opt/php@*; do
+            [ -x "$d/bin/php" ] && printf '%s\n' "${d##*/php@}"
+        done
+        # The unversioned formula links opt/php -> ../Cellar/php/X.Y.Z
+        if [ -x "$HOMEBREW_PREFIX/opt/php/bin/php" ]; then
+            target=$(readlink "$HOMEBREW_PREFIX/opt/php" 2>/dev/null)
+            [[ "$target" =~ /php/([0-9]+)\.([0-9]+) ]] && printf '%s.%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+        fi
+    } | grep -E '^[0-9]+\.[0-9]+$' | sort -t. -k1,1n -k2,2n -u
+}
+
+# Does PHP series X.Y (any patch release) satisfy a composer constraint?
+# Supports ||, |, AND via spaces/commas, ^, ~, >=, >, <=, <, =, !=,
+# wildcards (8.*, 8.1.*, *), bare versions and hyphen ranges (8.1 - 8.3).
+# Unparseable constraints never match.
+function utils_composer_constraint_matches {
+    local constraint="$1" series="$2"
+    [[ "$series" =~ ^[0-9]+\.[0-9]+$ ]] || return 1
+    local m=$(( ${series%%.*} * 100 + ${series#*.} ))
+    local group atom
+
+    constraint="${constraint//||/|}"
+    local IFS='|'
+    local -a groups
+    read -ra groups <<< "$constraint"
+    for group in "${groups[@]}"; do
+        # Hyphen range: "A.B - C.D"
+        group=$(printf '%s' "$group" | sed -E 's/([0-9.*]+) +- +([0-9.*]+)/>=\1 <=\2/g; s/,/ /g')
+        local ok=true seen=false
+        local -a atoms
+        # read -a splits without glob expansion (a bare "*" must stay "*")
+        IFS=' ' read -ra atoms <<< "$group"
+        for atom in "${atoms[@]}"; do
+            seen=true
+            utils_composer_atom_matches "$atom" "$m" || { ok=false; break; }
+        done
+        if [ "$seen" = "true" ] && [ "$ok" = "true" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# One constraint atom against series number m (X*100+Y); 2 = unparseable
+function utils_composer_atom_matches {
+    local atom="$1" m="$2" op
+    # Callers may have changed IFS; bash 3.2 then mangles "|" in regexes
+    local IFS=$' \t\n'
+    local atom_re='^(\^|~|>=|<=|>|<|==|=|!=)?v?([0-9]+|\*)(\.([0-9]+|\*))?(\.([0-9]+|\*))?$'
+    atom="${atom%@*}"          # stability flags (@dev)
+    if [[ "$atom" =~ $atom_re ]]; then
+        op="${BASH_REMATCH[1]}"
+        local maj="${BASH_REMATCH[2]}" min="${BASH_REMATCH[4]}" pat="${BASH_REMATCH[6]}"
+    else
+        return 2
+    fi
+    [ "$maj" = "*" ] && return 0
+    local major=$(( m / 100 ))
+    local base=$(( maj * 100 + ${min//\*/0} ))
+    [ -z "$min" ] && base=$(( maj * 100 ))
+
+    case "$op" in
+        "^")
+            [ "$m" -ge "$base" ] && [ "$major" -eq "$maj" ] ;;
+        "~")
+            if [ -n "$pat" ] || [ -z "$min" ]; then
+                # ~8.1.2 -> 8.1.x ; ~8 -> 8.x
+                if [ -z "$min" ]; then [ "$major" -eq "$maj" ]; else [ "$m" -eq "$base" ]; fi
+            else
+                [ "$m" -ge "$base" ] && [ "$major" -eq "$maj" ]
+            fi ;;
+        ">="|">")
+            [ "$m" -ge "$base" ] ;;
+        "<=")
+            if [ -z "$min" ]; then [ "$major" -le "$maj" ]; else [ "$m" -le "$base" ]; fi ;;
+        "<")
+            # < 8.2 / < 8.2.0 excludes the whole 8.2 series; < 8.2.3 includes 8.2.0
+            if [ -z "$min" ]; then
+                [ "$major" -lt "$maj" ]
+            elif [ -n "$pat" ] && [ "$pat" != "0" ] && [ "$pat" != "*" ]; then
+                [ "$m" -le "$base" ]
+            else
+                [ "$m" -lt "$base" ]
+            fi ;;
+        "!=")
+            return 0 ;;
+        *)
+            # =, == or bare: 8 -> 8.x, 8.1 / 8.1.3 / 8.1.* -> 8.1
+            if [ -z "$min" ] || [ "$min" = "*" ]; then [ "$major" -eq "$maj" ]; else [ "$m" -eq "$base" ]; fi ;;
+    esac
 }
 
 # Function to read PHP version from composer.json
@@ -765,24 +606,46 @@ function utils_read_composer_version {
     # 1. Check config.platform.php (highest priority)
     # We look for "php": "X.Y" inside the file, hoping it's unique enough or we catch the right one.
     # To be safer without jq, we can try to look for the platform block
-    local platform_php=$(grep -A 10 '"platform"' "$composer_file" 2>/dev/null | grep '"php"' | head -n 1)
+    local platform_php
+    platform_php=$(grep -A 10 '"platform"' "$composer_file" 2>/dev/null | grep '"php"' | head -n 1)
     
     if [ -n "$platform_php" ]; then
         # Extract version: "php": "8.1.0" -> 8.1.0
-        local version=$(echo "$platform_php" | sed -E 's/.*"php": *"([^"]+)".*/\1/')
+        local version
+        version=$(echo "$platform_php" | sed -E 's/.*"php": *"([^"]+)".*/\1/')
         # extract major.minor
         echo "$version" | grep -oE '[0-9]+\.[0-9]+' | head -n 1
         return 0
     fi
     
     # 2. Check require.php
-    local require_php=$(grep -A 20 '"require"' "$composer_file" 2>/dev/null | grep '"php"' | head -n 1)
+    local require_php
+    require_php=$(grep -A 20 '"require"' "$composer_file" 2>/dev/null | grep '"php"' | head -n 1)
     
     if [ -n "$require_php" ]; then
-        # Extract version: "php": "^8.1" -> 8.1
-        local version=$(echo "$require_php" | sed -E 's/.*"php": *"([^"]+)".*/\1/')
-        # extract major.minor
-        echo "$version" | grep -oE '[0-9]+\.[0-9]+' | head -n 1
+        # Extract constraint: "php": "^8.1 || ^8.2" -> ^8.1 || ^8.2
+        local version
+        version=$(echo "$require_php" | sed -E 's/.*"php": *"([^"]+)".*/\1/')
+        # 1. Keep the historical answer (first X.Y in the constraint) when it is
+        #    installed and satisfies the constraint, so working projects never move
+        # 2. Otherwise use the lowest installed series that satisfies it
+        # 3. Otherwise fall back to the historical answer
+        local first series installed
+        first=$(echo "$version" | grep -oE '[0-9]+\.[0-9]+' | head -n 1)
+        installed=$(utils_installed_php_series)
+        if [ -n "$first" ] && printf '%s\n' "$installed" | grep -qx "$first" &&
+           utils_composer_constraint_matches "$version" "$first"; then
+            echo "$first"
+            return 0
+        fi
+        while IFS= read -r series; do
+            [ -n "$series" ] || continue
+            if utils_composer_constraint_matches "$version" "$series"; then
+                echo "$series"
+                return 0
+            fi
+        done <<< "$installed"
+        echo "$first"
         return 0
     fi
     
@@ -798,11 +661,13 @@ function utils_read_tool_versions {
     fi
     
     # Look for line starting with php
-    local php_line=$(grep "^php " "$tool_file" 2>/dev/null | head -n 1)
+    local php_line
+    php_line=$(grep "^php " "$tool_file" 2>/dev/null | head -n 1)
     
     if [ -n "$php_line" ]; then
         # Extract version: php 8.1.0 -> 8.1.0
-        local version=$(echo "$php_line" | awk '{print $2}')
+        local version
+        version=$(echo "$php_line" | awk '{print $2}')
         # extract major.minor
         echo "$version" | grep -oE '[0-9]+\.[0-9]+' | head -n 1
         return 0

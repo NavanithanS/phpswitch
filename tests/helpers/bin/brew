@@ -1,0 +1,68 @@
+#!/bin/bash
+# Fake brew for tests.
+#   FAKE_BREW_PREFIX  prefix reported by `brew --prefix` (required for link/unlink)
+#   FAKE_BREW_LIST    newline-separated formulae reported by `brew list`
+#   FAKE_BREW_LOG     if set, every invocation is appended to this file
+#   FAKE_BREW_SERVICES  if set, a file whose lines follow the
+#                       `brew services list` header (e.g. "php@8.1 started nava ...")
+# `brew search` mimics real output, including the "==> Formulae" header,
+# tap prefixes and installed markers.
+[ -n "$FAKE_BREW_LOG" ] && printf '%s\n' "$*" >> "$FAKE_BREW_LOG"
+
+prefix="${FAKE_BREW_PREFIX:-/opt/homebrew}"
+
+# Last non-flag argument is the formula for link/unlink
+formula_arg() {
+    local arg formula=""
+    for arg in "$@"; do
+        case "$arg" in
+            -*) ;;
+            *) formula="$arg" ;;
+        esac
+    done
+    printf '%s\n' "$formula"
+}
+
+case "$1" in
+    --prefix)
+        printf '%s\n' "$prefix"
+        ;;
+    --version)
+        printf 'Homebrew 4.4.0\n'
+        ;;
+    search)
+        case "$2" in
+            "/php@[0-9]/")
+                printf '==> Formulae\n'
+                printf 'php@8.1\nphp@8.2 ✔\nphp@8.3\nshivammathur/php/php@7.4\n'
+                ;;
+            "/^php$/")
+                printf 'php\n'
+                ;;
+        esac
+        ;;
+    list)
+        if [ "$2" = "--versions" ] && [ "$3" = "php" ]; then
+            printf 'php 8.4.1\n'
+        else
+            printf '%s\n' "${FAKE_BREW_LIST:-}"
+        fi
+        ;;
+    link)
+        # FAKE_BREW_LINK_FAIL=1 simulates `brew link` failing
+        [ "${FAKE_BREW_LINK_FAIL:-}" = "1" ] && exit 1
+        formula=$(formula_arg "${@:2}")
+        mkdir -p "$prefix/bin"
+        ln -sfn "../opt/$formula/bin/php" "$prefix/bin/php"
+        ;;
+    unlink)
+        rm -f "$prefix/bin/php"
+        ;;
+    services)
+        if [ "$2" = "list" ]; then
+            printf 'Name Status User File\n'
+            [ -n "$FAKE_BREW_SERVICES" ] && cat "$FAKE_BREW_SERVICES"
+        fi
+        ;;
+esac
+exit 0
