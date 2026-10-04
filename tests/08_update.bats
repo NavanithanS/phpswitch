@@ -141,3 +141,127 @@ install_untouched() {
     run cmd_resolve_script_path "$TEST_ROOT/loop-a"
     [ "$status" -eq 0 ]
 }
+
+# --- release signatures (minisign) --------------------------------------------
+
+TEST_PUBKEY="RWTestKeyTestKeyTestKeyTestKeyTestKeyTestKeyTestKey00"
+
+# publish_signature <tag> <good|bad>  -> serve php-switcher.sh.minisig
+publish_signature() {
+    printf '%s-signature\n' "$2" > "$TEST_ROOT/release/php-switcher.sh.minisig"
+    fake_url "https://github.com/$REPO_SLUG/releases/download/$1/php-switcher.sh.minisig" \
+        "$TEST_ROOT/release/php-switcher.sh.minisig"
+}
+
+# A fake minisign first on PATH: logs its arguments, accepts "good-signature"
+use_fake_minisign() {
+    mkdir -p "$TEST_ROOT/minisign-bin"
+    cat > "$TEST_ROOT/minisign-bin/minisign" << 'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$MINISIGN_LOG"
+sig=""
+while [ $# -gt 0 ]; do
+    [ "$1" = "-x" ] && sig="$2"
+    shift
+done
+[ "$(cat "$sig")" = "good-signature" ]
+STUB
+    chmod +x "$TEST_ROOT/minisign-bin/minisign"
+    export MINISIGN_LOG="$TEST_ROOT/minisign.log"
+    export PATH="$TEST_ROOT/minisign-bin:$PATH"
+}
+
+@test "signed release with a valid signature reaches the prompt" {
+    PHPSWITCH_MINISIGN_PUBKEY="$TEST_PUBKEY"
+    use_fake_minisign
+    publish_release v1.5.0
+    publish_signature v1.5.0 good
+    run cmd_update_self <<< "n"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Release signature verified"* ]]
+    [[ "$output" == *"Update cancelled"* ]]
+    grep -qF -- "-V -q -P $TEST_PUBKEY -m " "$MINISIGN_LOG"
+    grep -q -- "php-switcher.sh.minisig" "$MINISIGN_LOG"
+    install_untouched
+}
+
+@test "bad signature is refused before the prompt" {
+    PHPSWITCH_MINISIGN_PUBKEY="$TEST_PUBKEY"
+    use_fake_minisign
+    publish_release v1.5.0
+    publish_signature v1.5.0 bad
+    run cmd_update_self <<< "y"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Signature verification failed"* ]]
+    [[ "$output" != *"Update to"* ]]
+    install_untouched
+}
+
+@test "missing signature is refused when minisign is installed" {
+    PHPSWITCH_MINISIGN_PUBKEY="$TEST_PUBKEY"
+    use_fake_minisign
+    publish_release v1.5.0
+    run cmd_update_self <<< "y"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"is not signed"* ]]
+    install_untouched
+}
+
+@test "without minisign, the checksum is used with a warning" {
+    PHPSWITCH_MINISIGN_PUBKEY="$TEST_PUBKEY"
+    export PATH="$INSTALL_DIR:${BATS_TEST_DIRNAME}/helpers/bin:/usr/bin:/bin"
+    run command -v minisign
+    [ "$status" -ne 0 ]
+    publish_release v1.5.0
+    run cmd_update_self <<< "n"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"minisign is not installed"* ]]
+    [[ "$output" == *"Update cancelled"* ]]
+    run grep -c 'minisig' "$FAKE_CURL_LOG"
+    [ "$output" = "0" ]
+}
+
+@test "a build without a signing key never asks for a signature" {
+    PHPSWITCH_MINISIGN_PUBKEY=""
+    use_fake_minisign
+    publish_release v1.5.0
+    run cmd_update_self <<< "n"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Update cancelled"* ]]
+    run grep -c 'minisig' "$FAKE_CURL_LOG"
+    [ "$output" = "0" ]
+    [ ! -e "$MINISIGN_LOG" ]
+}
+
+@test "the signing key can't be set from the config file or the environment" {
+    printf 'PHPSWITCH_MINISIGN_PUBKEY="RWattacker"\n' > "$HOME/.phpswitch.conf"
+    run env PHPSWITCH_MINISIGN_PUBKEY=RWattacker bash -c \
+        "source '$REPO_ROOT/phpswitch/config/defaults.sh'; source '$REPO_ROOT/phpswitch/lib/core.sh'; core_load_config 2>/dev/null; printf 'key=%s' \"\$PHPSWITCH_MINISIGN_PUBKEY\""
+    [ "$output" = "key=$(grep '^PHPSWITCH_MINISIGN_PUBKEY=' "$REPO_ROOT/phpswitch/config/defaults.sh" | cut -d'"' -f2)" ]
+}
+
+@test "real minisign: a signed release verifies, a tampered one is refused" {
+    command -v minisign >/dev/null || skip "minisign not installed"
+    local keys="$TEST_ROOT/keys"
+    mkdir -p "$keys"
+    minisign -G -W -p "$keys/test.pub" -s "$keys/test.key" > /dev/null
+    PHPSWITCH_MINISIGN_PUBKEY=$(sed -n 2p "$keys/test.pub")
+
+    publish_release v1.5.0
+    minisign -S -s "$keys/test.key" -m "$TEST_ROOT/release/php-switcher.sh" \
+        -x "$TEST_ROOT/release/php-switcher.sh.minisig" -t "phpswitch v1.5.0" > /dev/null
+    fake_url "https://github.com/$REPO_SLUG/releases/download/v1.5.0/php-switcher.sh.minisig" \
+        "$TEST_ROOT/release/php-switcher.sh.minisig"
+    run cmd_update_self <<< "n"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Release signature verified"* ]]
+
+    # A different key's signature over the same file must be refused
+    minisign -G -W -p "$keys/other.pub" -s "$keys/other.key" > /dev/null
+    minisign -S -s "$keys/other.key" -m "$TEST_ROOT/release/php-switcher.sh" \
+        -x "$TEST_ROOT/release/php-switcher.sh.minisig" > /dev/null
+    run cmd_update_self <<< "y"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Signature verification failed"* ]]
+    install_untouched
+}

@@ -116,3 +116,7 @@ All three hooks skipped when `$PWD` hadn't changed, so a `.php-version` created 
 ## [2026-10-04] lint | Valet/Herd and PECL decided
 
 Valet: `doctor` warns when Valet is installed (check 9b) and recommends `valet use`. phpswitch doesn't hand `global` over to Valet, because `valet use` needs sudo. Herd needs nothing new. PECL install won't be done. The README now points Valet users to `valet use` and lists every rc file the migration cleans. Updated [[concepts/doctor]] and [[decisions/roadmap-2026]].
+
+## [2026-10-04] lint | minisign release signatures
+
+`tools/release.sh` signs `php-switcher.sh` with minisign and uploads `php-switcher.sh.minisig`. It verifies the signature against the public key built into the artifact before tagging, and refuses to start without minisign, the key or `PHPSWITCH_MINISIGN_PUBKEY`. `--update` verifies the signature when minisign is installed, refusing a missing or bad one; otherwise it warns and relies on the checksum. CI installs minisign for a real round-trip test. The public key is still empty until the user generates the key pair. Updated AGENTS.md, [[concepts/release-and-update]] and [[decisions/roadmap-2026]].

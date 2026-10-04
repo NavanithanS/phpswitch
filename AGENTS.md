@@ -25,7 +25,8 @@ This repository includes a structured wiki in the `wiki/` directory that serves 
 
 ## 5. Releases
 - Always release with `tools/release.sh`. It bumps `PHPSWITCH_VERSION` in `config/defaults.sh`, creates a `vX.Y.Z` tag, and uploads `php-switcher.sh` together with `php-switcher.sh.sha256`, then patches the Homebrew formula.
-- `phpswitch --update` **refuses** any release that doesn't include `php-switcher.sh.sha256`, so never create releases by hand without it. See `wiki/concepts/release-and-update.md`.
+- `phpswitch --update` **refuses** any release that doesn't include `php-switcher.sh.sha256`, so never create releases by hand without it.
+- Releases are also signed with minisign (`php-switcher.sh.minisig`). `release.sh` refuses to run without `minisign`, a non-empty `PHPSWITCH_MINISIGN_PUBKEY` in `config/defaults.sh` and the secret key. When minisign is installed, `--update` refuses a missing or invalid signature. Keep `PHPSWITCH_MINISIGN_PUBKEY` a plain assignment that nothing else can override. Never run `tools/release.sh` to test changes, because it commits, pushes, tags and publishes. See `wiki/concepts/release-and-update.md`.
 
 ## 6. Per-shell integration (`lib/init.sh`)
 - The code printed by `phpswitch init` is `eval`'d at **every shell startup**. It must stay valid bash 3.2, zsh and fish, print no banner, and stay fast. Commands it relies on (`init`, `__php-dir`) skip the banner and the dependency check.

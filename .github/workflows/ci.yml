@@ -12,8 +12,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install tools
-        # fish is needed to syntax-check the generated fish integration
-        run: brew install bats-core shellcheck fish
+        # fish runs the generated fish integration; minisign the signed-update round trip
+        run: brew install bats-core shellcheck fish minisign
 
       - name: Shellcheck
         # Modules are linted individually and as the built artifact (whole-program view).

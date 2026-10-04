@@ -3,7 +3,7 @@ title: Release & Self-Update
 category: concept
 tags: [release, update, security, homebrew]
 created: 2026-10-03
-updated: 2026-10-03
+updated: 2026-10-04
 sources: 0
 ---
 
@@ -14,8 +14,9 @@ sources: 0
 1. Prompts for the new version (accepts `1.5.0` or `v1.5.0`; must be `X.Y.Z`).
 2. Writes it to `PHPSWITCH_VERSION` in `phpswitch/config/defaults.sh`, the single source of the version. Rebuilds, commits and pushes.
 3. Writes `php-switcher.sh.sha256` (`shasum -a 256` format; the file is gitignored).
-4. Tags `vX.Y.Z` and creates a GitHub Release with **both** `php-switcher.sh` and `php-switcher.sh.sha256` as assets.
-5. Hashes the source tarball of the tag and patches `Formula/phpswitch.rb` (url and sha256). Copies the formula to the tap repo (`../homebrew-phpswitch` or `$TAP_REPO`).
+4. Signs the artifact with minisign (`php-switcher.sh.minisig`, trusted comment `phpswitch vX.Y.Z`; the secret key is `$MINISIGN_SECRET_KEY` or `~/.minisign/minisign.key`, and minisign asks for its password). It then verifies the signature against the public key read from the **built** artifact, and stops before tagging if they don't match. Before anything is changed, the script checks that `minisign`, a non-empty `PHPSWITCH_MINISIGN_PUBKEY` and the secret key file all exist.
+5. Tags `vX.Y.Z` and creates a GitHub Release with `php-switcher.sh`, `php-switcher.sh.sha256` and `php-switcher.sh.minisig` as assets.
+6. Hashes the source tarball of the tag and patches `Formula/phpswitch.rb` (url and sha256). Copies the formula to the tap repo (`../homebrew-phpswitch` or `$TAP_REPO`).
 
 ## Release-time follow-ups
 
@@ -35,6 +36,8 @@ GET api.github.com/repos/NavanithanS/phpswitch/releases/latest → tag_name (v o
 download releases/download/<tag>/php-switcher.sh and php-switcher.sh.sha256
         │ checksum missing, mismatched or malformed → refuse, exit 1
         │ embedded PHPSWITCH_VERSION != tag version → refuse, exit 1
+        │ key built in + minisign installed: .minisig missing or invalid → refuse, exit 1
+        │ key built in, no minisign → warning, checksum only
         ▼
 prompt → backup → install (existing copy/sudo logic)
 ```
@@ -42,7 +45,8 @@ prompt → backup → install (existing copy/sudo logic)
 - **Fails closed.** A release without the `.sha256` asset can't be installed through `--update`. `shasum` is required.
 - **Exit status:** `--update` passes through the function's status, so a refused update exits non-zero.
 - **Symlinks:** Homebrew links with relative symlinks (`bin/phpswitch → ../Cellar/...`). `cmd_resolve_script_path` normalizes each hop with `cd`/`pwd` and caps the chain at 40 hops.
-- **Trust model:** the checksum comes from the same release as the script. It protects against corruption and mismatched assets, but not against a compromised GitHub account. Signing is a possible future step.
+- **Trust model:** the checksum comes from the same release as the script, so on its own it only protects against corruption and mismatched assets. The minisign signature is made with a key that never touches GitHub. An install that has the public key built in, and minisign installed, therefore rejects a release from a compromised GitHub account. Without minisign it falls back to the checksum and prints a warning (the user's choice, 2026-10-04). Dev builds have an empty key and skip the signature step.
+- **Key custody:** back up the secret key and its password. If the key is lost, every install that has minisign refuses all later updates. Rotating the key needs one release, signed with the old key, whose script embeds the new public key.
 
 ## Tests
 

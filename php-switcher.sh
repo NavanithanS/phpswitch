@@ -11,6 +11,11 @@
 
 PHPSWITCH_VERSION="1.4.5"
 
+# minisign public key that release assets are signed with (tools/release.sh).
+# A fixed value, never read from the config file or the environment. Empty
+# only in development builds: --update then verifies the checksum alone.
+PHPSWITCH_MINISIGN_PUBKEY=""
+
 # Default configuration values
 DEFAULT_AUTO_RESTART_PHP_FPM=true
 DEFAULT_BACKUP_CONFIG_FILES=true
@@ -4181,6 +4186,30 @@ function cmd_update_self {
         utils_show_status "error" "Downloaded script reports version '$downloaded_version', expected $new_version; update aborted"
         rm -rf "$tmp_dir"
         return 1
+    fi
+
+    # Verify the release signature against the key built into this script.
+    # Without minisign, only the checksum (from the same release) is checked.
+    if [ -n "$PHPSWITCH_MINISIGN_PUBKEY" ]; then
+        if command -v minisign >/dev/null 2>&1; then
+            if ! curl -fsSL "$base_url/php-switcher.sh.minisig" -o "$tmp_dir/php-switcher.sh.minisig"; then
+                utils_show_status "error" "Release $tag is not signed; refusing to update"
+                rm -rf "$tmp_dir"
+                return 1
+            fi
+            if ! minisign -V -q -P "$PHPSWITCH_MINISIGN_PUBKEY" -m "$tmp_dir/php-switcher.sh" \
+                    -x "$tmp_dir/php-switcher.sh.minisig" >/dev/null 2>&1; then
+                utils_show_status "error" "Signature verification failed! File may be compromised."
+                rm -rf "$tmp_dir"
+                return 1
+            fi
+            utils_show_status "success" "Release signature verified"
+        else
+            utils_show_status "warning" "minisign is not installed, so only the checksum was verified"
+            printf "  To also verify the release signature: brew install minisign\n"
+        fi
+    else
+        core_debug_log "No signing key built in; verified the checksum only"
     fi
 
     printf "  Update to %s? (y/n) " "$new_version"

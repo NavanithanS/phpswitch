@@ -25,6 +25,16 @@ else
     echo "⚠️  Warning: 'gh' CLI not found. GitHub Release creation will be skipped."
 fi
 
+# Releases are signed; `phpswitch --update` verifies the signature with the
+# public key built into the script. Check before anything is changed.
+MINISIGN_SECRET_KEY="${MINISIGN_SECRET_KEY:-$HOME/.minisign/minisign.key}"
+command -v minisign >/dev/null 2>&1 || { echo "❌ Error: 'minisign' is required to sign releases (brew install minisign)."; exit 1; }
+if ! grep -q '^PHPSWITCH_MINISIGN_PUBKEY="[A-Za-z0-9+/=]\{20,\}"$' "$DEFAULTS_FILE"; then
+    echo "❌ Error: PHPSWITCH_MINISIGN_PUBKEY in $DEFAULTS_FILE is empty or malformed."
+    exit 1
+fi
+[ -f "$MINISIGN_SECRET_KEY" ] || { echo "❌ Error: minisign secret key not found at $MINISIGN_SECRET_KEY (set MINISIGN_SECRET_KEY)."; exit 1; }
+
 # Function to get current version
 get_current_version() {
     grep '^PHPSWITCH_VERSION=' "$DEFAULTS_FILE" | sed 's/PHPSWITCH_VERSION="\(.*\)"/\1/'
@@ -95,6 +105,20 @@ CHECKSUM_FILE="$PROJECT_ROOT/php-switcher.sh.sha256"
 (cd "$PROJECT_ROOT" && shasum -a 256 php-switcher.sh > "$CHECKSUM_FILE")
 echo "🔐 Artifact SHA256: $(awk '{print $1}' "$CHECKSUM_FILE")"
 
+# Signature asset, verified by `phpswitch --update` when minisign is installed
+SIGNATURE_FILE="$PROJECT_ROOT/php-switcher.sh.minisig"
+echo "✍️  Signing the artifact (minisign may ask for the key password)..."
+minisign -S -s "$MINISIGN_SECRET_KEY" -m "$ARTIFACT" -x "$SIGNATURE_FILE" -t "phpswitch v$NEW_VERSION"
+# Check against the key built into the artifact, so a build/key mismatch is
+# caught before anything is published
+BUILT_PUBKEY=$(grep '^PHPSWITCH_MINISIGN_PUBKEY=' "$ARTIFACT" | cut -d'"' -f2)
+if [ -z "$BUILT_PUBKEY" ] || ! minisign -V -q -P "$BUILT_PUBKEY" -m "$ARTIFACT" -x "$SIGNATURE_FILE"; then
+    echo "❌ Error: the signature doesn't verify against the public key built into php-switcher.sh."
+    echo "   Nothing was tagged or published."
+    exit 1
+fi
+echo "✅ Signature verified against the built-in public key"
+
 # 2. Tag and Release on GitHub
 echo "🏷️  Tagging v$NEW_VERSION..."
 if git rev-parse "v$NEW_VERSION" >/dev/null 2>&1; then
@@ -113,6 +137,7 @@ if [ "$HAS_GH" = true ]; then
         gh release create "v$NEW_VERSION" \
             "$ARTIFACT#Standalone Script (php-switcher.sh)" \
             "$CHECKSUM_FILE#SHA-256 checksum" \
+            "$SIGNATURE_FILE#minisign signature" \
             --title "v$NEW_VERSION" \
             --generate-notes
         echo "✅ Release created successfully!"
@@ -123,6 +148,7 @@ else
     echo "   2. Tag: v$NEW_VERSION"
     echo "   3. Upload: $ARTIFACT"
     echo "      and:    $CHECKSUM_FILE  (required by phpswitch --update)"
+    echo "      and:    $SIGNATURE_FILE  (required when minisign is installed)"
     echo "   4. Publish the release."
     
     read -r -p "Press Enter once you have created the release..."

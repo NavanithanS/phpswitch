@@ -182,6 +182,30 @@ function cmd_update_self {
         return 1
     fi
 
+    # Verify the release signature against the key built into this script.
+    # Without minisign, only the checksum (from the same release) is checked.
+    if [ -n "$PHPSWITCH_MINISIGN_PUBKEY" ]; then
+        if command -v minisign >/dev/null 2>&1; then
+            if ! curl -fsSL "$base_url/php-switcher.sh.minisig" -o "$tmp_dir/php-switcher.sh.minisig"; then
+                utils_show_status "error" "Release $tag is not signed; refusing to update"
+                rm -rf "$tmp_dir"
+                return 1
+            fi
+            if ! minisign -V -q -P "$PHPSWITCH_MINISIGN_PUBKEY" -m "$tmp_dir/php-switcher.sh" \
+                    -x "$tmp_dir/php-switcher.sh.minisig" >/dev/null 2>&1; then
+                utils_show_status "error" "Signature verification failed! File may be compromised."
+                rm -rf "$tmp_dir"
+                return 1
+            fi
+            utils_show_status "success" "Release signature verified"
+        else
+            utils_show_status "warning" "minisign is not installed, so only the checksum was verified"
+            printf "  To also verify the release signature: brew install minisign\n"
+        fi
+    else
+        core_debug_log "No signing key built in; verified the checksum only"
+    fi
+
     printf "  Update to %s? (y/n) " "$new_version"
     if [ "$(utils_validate_yes_no "" "y")" = "y" ]; then
         # Create backup
