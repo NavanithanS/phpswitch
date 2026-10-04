@@ -341,3 +341,78 @@ cd '${HOME}x'; set -l r (_phpswitch_detect); echo \"out=\$r\""
         _phpswitch_valid_dir "$PHPSWITCH_PREFIX/opt/php@8.1/../../escape" && echo accepted || echo rejected'
     [ "$output" = "rejected" ]
 }
+
+# --- per-prompt re-check ------------------------------------------------------
+
+@test "prompt hook is wired up: zsh precmd and chpwd, bash PROMPT_COMMAND" {
+    run_shell zsh 'print -l $precmd_functions; print -l $chpwd_functions'
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s\n' "${lines[@]}" | grep -cx '_phpswitch_hook')" = "2" ]
+    run_shell bash 'echo "pc=$PROMPT_COMMAND"'
+    [[ "$output" == *"pc=_phpswitch_hook"* ]]
+}
+
+@test "prompt re-check picks up created, edited and deleted version files" {
+    for sh in bash zsh; do
+        rm -f "$PROJECT/.php-version"
+        run_shell "$sh" '
+            cd "$HOME/project/src"; _phpswitch_hook; php -v
+            echo 8.2 > "$HOME/project/.php-version"; _phpswitch_hook; php -v
+            echo 8.3 > "$HOME/project/.php-version"; _phpswitch_hook; php -v
+            rm "$HOME/project/.php-version"; _phpswitch_hook; php -v'
+        [ "$status" -eq 0 ]
+        [ "${lines[0]}" = "PHP 8.1.0 (cli)" ] || { echo "$sh: $output"; return 1; }
+        [ "${lines[1]}" = "PHP 8.2.0 (cli)" ] || { echo "$sh: $output"; return 1; }
+        [ "${lines[2]}" = "PHP 8.3.0 (cli)" ] || { echo "$sh: $output"; return 1; }
+        [ "${lines[3]}" = "PHP 8.1.0 (cli)" ] || { echo "$sh: $output"; return 1; }
+    done
+}
+
+@test "prompt re-check runs the binary only when the project files change" {
+    printf '{ "require": { "php": "^8.2" } }\n' > "$PROJECT/composer.json"
+    for sh in bash zsh; do
+        run_shell "$sh" '
+            cd "$HOME/project"; _phpswitch_hook
+            : > "$FAKE_BREW_LOG"
+            _phpswitch_hook; _phpswitch_hook; _phpswitch_hook
+            echo "quiet=$(grep -c -- --prefix "$FAKE_BREW_LOG")"
+            echo "php 8.3.0" > "$HOME/project/.tool-versions"; _phpswitch_hook
+            echo "changed=$(grep -c -- --prefix "$FAKE_BREW_LOG")"'
+        rm -f "$PROJECT/.tool-versions"
+        [[ "$output" == *"quiet=0"* ]] || { echo "$sh: $output"; return 1; }
+        [[ "$output" != *"changed=0"* ]] || { echo "$sh: $output"; return 1; }
+    done
+}
+
+@test "hook keeps the previous exit status, also when pinned, under nounset" {
+    echo "8.2" > "$PROJECT/.php-version"
+    for sh in bash zsh; do
+        run_shell "$sh" 'set -u
+            cd "$HOME/project"; false; _phpswitch_hook; echo "a=$?"
+            false; _phpswitch_hook; echo "b=$?"
+            true; _phpswitch_hook; echo "c=$?"
+            phpswitch use 8.3 >/dev/null; false; _phpswitch_hook; echo "d=$?"'
+        [ "$status" -eq 0 ]
+        [ "$output" = $'a=1\nb=1\nc=0\nd=1' ] || { echo "$sh: $output"; return 1; }
+    done
+}
+
+@test "fish: prompt event re-checks edited version files and keeps the status" {
+    local fish_bin
+    fish_bin="$(command -v fish)" || skip "fish not installed"
+    "$BIN" init fish > "$TEST_ROOT/init.fish"
+    echo "8.2" > "$PROJECT/.php-version"
+    run env -i HOME="$HOME" PATH="$BASE_PATH" FAKE_BREW_PREFIX="$FAKE_BREW_PREFIX" \
+        FAKE_BREW_LIST="$FAKE_BREW_LIST" FAKE_BREW_LOG="$FAKE_BREW_LOG" \
+        "$fish_bin" --no-config -c "source '$TEST_ROOT/init.fish'
+cd '$PROJECT/src'; emit fish_prompt; echo a=(php -v)
+echo 8.3 > '$PROJECT/.php-version'; emit fish_prompt; echo b=(php -v)
+rm '$PROJECT/.php-version'; emit fish_prompt; echo c=(php -v)
+false; _phpswitch_hook; echo rc=\$status"
+    echo "$output"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"a=PHP 8.2.0 (cli)"* ]]
+    [[ "$output" == *"b=PHP 8.3.0 (cli)"* ]]
+    [[ "$output" == *"c=PHP 8.1.0 (cli)"* ]]
+    [[ "$output" == *"rc=1"* ]]
+}

@@ -3,7 +3,7 @@ title: Improvement Roadmap (2026-10)
 category: decision
 tags: [roadmap, planning, ci, security, auto-switch, v2]
 created: 2026-10-03
-updated: 2026-10-03
+updated: 2026-10-04
 sources: 0
 ---
 
@@ -76,7 +76,7 @@ The `sleep 1` loop in `core.sh:280-284` is a timeout guard for `brew search`, so
 
 ## Phase 3: Per-shell switching and a fast hook (v2.0)
 
-**3a ✅ (2026-10-03):** `init`, the wrapper, the hook, and `use`/`local`/`global`. See [[concepts/shell-integration]]. **3b ✅ (2026-10-03):** `--install-auto-switch` writes the `eval` line for the login shell and migrates legacy blocks from every rc file, all-or-nothing.
+**3a ✅ (2026-10-03):** `init`, the wrapper, the hook, and `use`/`local`/`global`. See [[concepts/shell-integration]]. **3b ✅ (2026-10-03):** `--install-auto-switch` writes the `eval` line for the login shell and migrates legacy blocks from every rc file, all-or-nothing. **3c ✅ (2026-10-04):** the hook also re-checks on each prompt, so a `.php-version` created or edited in the current directory applies without leaving it. A builtin-only signature decides whether to re-detect, so the binary is never called on an unchanged prompt.
 
 **Goal:** fix F1 and F2. This is a breaking change.
 

@@ -84,6 +84,7 @@ function init_print {
                 cat << 'EOF'
 autoload -Uz add-zsh-hook
 add-zsh-hook chpwd _phpswitch_hook
+add-zsh-hook precmd _phpswitch_hook
 # Re-evaluate even if this shell already ran the hook here (re-sourced rc)
 _phpswitch_last_pwd=""
 _phpswitch_hook
@@ -202,13 +203,49 @@ _phpswitch_detect() {
     done
 }
 
-# Directory hook: re-evaluate when $PWD changes, unless pinned by `phpswitch use`
+# Fingerprint of the files that decide the project version: the first
+# directory _phpswitch_detect would stop at, which of the files it holds,
+# and the contents of the small ones. Runs on every prompt, so builtins
+# only (no subshells). Sets _phpswitch_sig (empty if none).
+_phpswitch_signature() {
+    local dir="$PWD" home="${HOME%/}" f line s
+    _phpswitch_sig=""
+    while [ "$dir" != "/" ] && { [ "$dir" = "$home" ] || [[ "$dir" == "$home"/* ]]; }; do
+        s=""
+        for f in .php-version .phpversion .tool-versions composer.json; do
+            [ -f "$dir/$f" ] && s="$s|$f"
+        done
+        if [ -n "$s" ]; then
+            for f in .php-version .phpversion .tool-versions; do
+                [ -f "$dir/$f" ] && [ -r "$dir/$f" ] || continue
+                s="$s|"
+                while IFS= read -r line || [ -n "$line" ]; do
+                    s="$s$line;"
+                done < "$dir/$f"
+            done
+            _phpswitch_sig="$dir$s"
+            return 0
+        fi
+        dir="${dir%/*}"
+        [ -z "$dir" ] && dir="/"
+    done
+}
+
+# Directory and prompt hook: re-evaluate when $PWD or the project's version
+# files change, unless pinned by `phpswitch use`. Keeps the caller's exit
+# status for status-aware prompts.
 _phpswitch_hook() {
-    [ -n "${PHPSWITCH_PINNED:-}" ] && return 0
-    [ "$PWD" = "${_phpswitch_last_pwd:-}" ] && return 0
+    local rc=$?
+    [ -n "${PHPSWITCH_PINNED:-}" ] && return $rc
+    _phpswitch_signature
+    if [ "$PWD" = "${_phpswitch_last_pwd:-}" ] && [ "$_phpswitch_sig" = "${_phpswitch_last_sig:-}" ]; then
+        return $rc
+    fi
     _phpswitch_last_pwd="$PWD"
+    _phpswitch_last_sig="$_phpswitch_sig"
     _phpswitch_detect
     _phpswitch_apply "$_phpswitch_found"
+    return $rc
 }
 
 phpswitch() {
@@ -325,11 +362,47 @@ function _phpswitch_detect
     end
 end
 
+# Fingerprint of the files that decide the project version (see the bash
+# version); printed, empty if none. Builtins only: runs on every prompt.
+function _phpswitch_signature
+    set -l dir $PWD
+    set -l home (string replace -r '/$' '' -- "$HOME")
+    while test "$dir" != "/"; and begin; test "$dir" = "$home"; or string match -q -- "$home/*" "$dir"; end
+        set -l s ""
+        for f in .php-version .phpversion .tool-versions composer.json
+            test -f "$dir/$f"; and set s "$s|$f"
+        end
+        if test -n "$s"
+            for f in .php-version .phpversion .tool-versions
+                test -f "$dir/$f"; and test -r "$dir/$f"; or continue
+                set -l c (string join ';' < "$dir/$f")
+                set s "$s|$c"
+            end
+            echo "$dir$s"
+            return 0
+        end
+        set dir (string replace -r '/[^/]*$' '' -- "$dir")
+        test -z "$dir"; and set dir /
+    end
+end
+
 function _phpswitch_hook --on-variable PWD
-    set -q PHPSWITCH_PINNED; and return 0
-    test "$PWD" = "$_phpswitch_last_pwd"; and return 0
+    set -l rc $status
+    set -q PHPSWITCH_PINNED; and return $rc
+    set -l sig (_phpswitch_signature)
+    if test "$PWD" = "$_phpswitch_last_pwd"; and test "$sig" = "$_phpswitch_last_sig"
+        return $rc
+    end
     set -g _phpswitch_last_pwd $PWD
+    set -g _phpswitch_last_sig "$sig"
     _phpswitch_apply (_phpswitch_detect)
+    return $rc
+end
+
+# Re-check before each prompt, so a version file created or edited in this
+# directory applies without leaving it
+function _phpswitch_prompt_hook --on-event fish_prompt
+    _phpswitch_hook
 end
 
 function phpswitch
