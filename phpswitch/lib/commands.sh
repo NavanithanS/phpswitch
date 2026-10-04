@@ -227,6 +227,9 @@ function cmd_parse_arguments {
     elif [ "$1" = "--install-auto-switch" ]; then
         auto_install
         exit $?
+    elif [ "$1" = "--uninstall-auto-switch" ]; then
+        auto_uninstall
+        exit $?
     elif [ "$1" = "--clear-directory-cache" ]; then
         auto_clear_directory_cache
         exit 0
@@ -266,6 +269,7 @@ function cmd_parse_arguments {
         printf "    phpswitch --refresh-cache            refresh available versions cache\n"
         printf "    phpswitch --fix-permissions          fix cache directory permissions\n"
         printf "    phpswitch --install-auto-switch      add per-shell switching to your rc file\n"
+        printf "    phpswitch --uninstall-auto-switch    remove auto-switching from your rc files\n"
         printf "    phpswitch --clear-directory-cache    clear legacy auto-switching cache\n"
         printf "    phpswitch --check-dependencies       check system dependencies\n"
         printf "    phpswitch --install                  install as a system command\n"

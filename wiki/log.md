@@ -104,3 +104,7 @@ Like option 5 before, "auto restart PHP-FPM" and "backup config files" passed `t
 ## [2026-10-04] lint | One rc file list, whole-line marker match
 
 The rc files to scan were listed three times. The legacy list lacked `.zprofile` and `.bash_login`, so hooks there were never migrated or removed. All three scans now use `auto_rc_candidates`. `auto_install` and doctor also matched the integration marker as a substring while uninstall matched whole lines, so a comment containing the marker made install say "already set up" while the menu said "off". All four now use `grep -qxF`. Updated AGENTS.md, [[concepts/shell-integration]] and [[entities/lib-auto-switch]].
+
+## [2026-10-04] lint | `--uninstall-auto-switch`
+
+New flag, the inverse of `--install-auto-switch`: it runs `auto_uninstall` and exits with its status. It's in `--help`, `COMPLETION_FLAGS` and the README. Updated [[concepts/shell-integration]] and [[entities/lib-auto-switch]].

@@ -7,7 +7,7 @@
 # Subcommands and flags offered by completion; keep in sync with --help
 # (tests/13_completions.bats fails if they drift)
 COMPLETION_SUBCOMMANDS="use global local init doctor completions"
-COMPLETION_FLAGS="--switch= --switch-force= --install= --uninstall= --uninstall-force= --list --json --current --project --clear-cache --refresh-cache --fix-permissions --install-auto-switch --clear-directory-cache --check-dependencies --install --uninstall --update --version --debug --yes --quiet --help"
+COMPLETION_FLAGS="--switch= --switch-force= --install= --uninstall= --uninstall-force= --list --json --current --project --clear-cache --refresh-cache --fix-permissions --install-auto-switch --uninstall-auto-switch --clear-directory-cache --check-dependencies --install --uninstall --update --version --debug --yes --quiet --help"
 
 function completions_print {
     local shell_type="$1"

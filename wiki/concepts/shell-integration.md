@@ -64,7 +64,7 @@ Leaving a project removes the per-shell entry, so the global version shows throu
 
 ## Disabling (`auto_uninstall`)
 
-"Disable auto-switching" in the menu (main menu `a`, or answering no to config option 5) removes phpswitch from the shell config instead of only flipping `AUTO_SWITCH_PHP_VERSION`, which nothing at shell startup reads.
+`phpswitch --uninstall-auto-switch`, or "Disable auto-switching" in the menu (main menu `a`, or answering no to config option 5), removes phpswitch from the shell config instead of only flipping `AUTO_SWITCH_PHP_VERSION`, which nothing at shell startup reads.
 
 - Whether auto-switching is on is judged by the rc files (`auto_is_installed`: the integration marker as a whole line, or a legacy hook, in any file from `auto_rc_candidates`: `.zshrc`, `.zprofile`, `.bashrc`, `.bash_profile`, `.bash_login`, `.profile`, `config.fish`), not by the config flag. The flag stays `false` when the line was installed before `~/.phpswitch.conf` existed.
 - From every such file it removes the marker, the `… init <shell>` line after it and the blank separator before it (`auto_strip_init_lines`), plus any legacy block (`auto_strip_legacy_hooks`). Uninstalling right after installing restores the file byte for byte.

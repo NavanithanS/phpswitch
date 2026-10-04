@@ -144,7 +144,7 @@ phpswitch local 8.3    # write .php-version here
 
 When you `cd`, the current shell switches to the project's PHP version (`.php-version`, `composer.json`, `.tool-versions`) and switches back when you leave. Other terminals, PHP-FPM and your IDE are not affected. Changes made by hand to `.php-version` take effect on the next `cd`.
 
-`phpswitch --install-auto-switch` adds this line for you (for bash on macOS, to the login file Terminal actually reads). To turn it off again, choose "Disable auto-switching" in the interactive menu (`a`): it removes the line, with a backup.
+`phpswitch --install-auto-switch` adds this line for you (for bash on macOS, to the login file Terminal actually reads). To turn it off again, run `phpswitch --uninstall-auto-switch` or choose "Disable auto-switching" in the interactive menu (`a`): it removes the line, with a backup.
 
 ### Shell completions
 

@@ -391,3 +391,22 @@ RC
     run grep -cx '# PHPSwitch shell integration' "$HOME/.zshrc"
     [ "$output" = "0" ]
 }
+
+@test "--uninstall-auto-switch removes the line and reports failure through its exit code" {
+    printf 'AUTO_RESTART_PHP_FPM=false\n' > "$HOME/.phpswitch.conf"
+    printf 'export A=1\n' > "$HOME/.zshrc"
+    run env SHELL=/bin/zsh "$REPO_ROOT/php-switcher.sh" --install-auto-switch
+    [ "$status" -eq 0 ]
+    run env SHELL=/bin/zsh "$REPO_ROOT/php-switcher.sh" --uninstall-auto-switch
+    [ "$status" -eq 0 ]
+    run grep -c 'PHPSwitch shell integration' "$HOME/.zshrc"
+    [ "$output" = "0" ]
+    grep -q "AUTO_SWITCH_PHP_VERSION=\"false\"" "$HOME/.phpswitch.conf"
+
+    # a line after the marker that phpswitch didn't write -> refuse, exit non-zero
+    printf '# PHPSwitch shell integration\nexport B=2\n' >> "$HOME/.zshrc"
+    before=$(sum "$HOME/.zshrc")
+    run env SHELL=/bin/zsh "$REPO_ROOT/php-switcher.sh" --uninstall-auto-switch
+    [ "$status" -ne 0 ]
+    [ "$(sum "$HOME/.zshrc")" = "$before" ]
+}
