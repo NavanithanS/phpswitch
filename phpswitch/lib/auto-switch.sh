@@ -102,12 +102,18 @@ function auto_login_shell {
     esac
 }
 
+# Every shell startup file phpswitch may have written to, one per line
+function auto_rc_candidates {
+    printf '%s\n' "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.bashrc" "$HOME/.bash_profile" \
+        "$HOME/.bash_login" "$HOME/.profile" "$HOME/.config/fish/config.fish"
+}
+
 # Every rc file a legacy installer may have written to
 function auto_legacy_rc_candidates {
     local f
-    for f in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" "$HOME/.config/fish/config.fish"; do
+    while IFS= read -r f; do
         [ -f "$f" ] && grep -q "phpswitch_auto_detect_project" "$f" 2>/dev/null && printf '%s\n' "$f"
-    done
+    done < <(auto_rc_candidates)
 }
 
 # Install per-shell integration into the login shell's rc file and remove the
@@ -159,7 +165,7 @@ function auto_install {
     # Back up the target rc now, so a failed backup can't leave legacy hooks
     # removed without the integration line added
     local needs_init=true
-    if [ -f "$rc_file" ] && grep -qF "$AUTO_INIT_MARKER" "$rc_file"; then
+    if [ -f "$rc_file" ] && grep -qxF "$AUTO_INIT_MARKER" "$rc_file"; then
         needs_init=false
     fi
     local migrated=false
@@ -217,9 +223,9 @@ function auto_install {
 # Every rc file holding the integration line written by auto_install
 function auto_integration_rc_files {
     local f
-    for f in "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile" "$HOME/.config/fish/config.fish"; do
+    while IFS= read -r f; do
         [ -f "$f" ] && grep -qxF "$AUTO_INIT_MARKER" "$f" 2>/dev/null && printf '%s\n' "$f"
-    done
+    done < <(auto_rc_candidates)
 }
 
 # Whether phpswitch's auto-switching is in any rc file (v2 line or legacy hook)

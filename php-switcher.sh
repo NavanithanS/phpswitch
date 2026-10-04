@@ -2877,12 +2877,18 @@ function auto_login_shell {
     esac
 }
 
+# Every shell startup file phpswitch may have written to, one per line
+function auto_rc_candidates {
+    printf '%s\n' "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.bashrc" "$HOME/.bash_profile" \
+        "$HOME/.bash_login" "$HOME/.profile" "$HOME/.config/fish/config.fish"
+}
+
 # Every rc file a legacy installer may have written to
 function auto_legacy_rc_candidates {
     local f
-    for f in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" "$HOME/.config/fish/config.fish"; do
+    while IFS= read -r f; do
         [ -f "$f" ] && grep -q "phpswitch_auto_detect_project" "$f" 2>/dev/null && printf '%s\n' "$f"
-    done
+    done < <(auto_rc_candidates)
 }
 
 # Install per-shell integration into the login shell's rc file and remove the
@@ -2934,7 +2940,7 @@ function auto_install {
     # Back up the target rc now, so a failed backup can't leave legacy hooks
     # removed without the integration line added
     local needs_init=true
-    if [ -f "$rc_file" ] && grep -qF "$AUTO_INIT_MARKER" "$rc_file"; then
+    if [ -f "$rc_file" ] && grep -qxF "$AUTO_INIT_MARKER" "$rc_file"; then
         needs_init=false
     fi
     local migrated=false
@@ -2992,9 +2998,9 @@ function auto_install {
 # Every rc file holding the integration line written by auto_install
 function auto_integration_rc_files {
     local f
-    for f in "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile" "$HOME/.config/fish/config.fish"; do
+    while IFS= read -r f; do
         [ -f "$f" ] && grep -qxF "$AUTO_INIT_MARKER" "$f" 2>/dev/null && printf '%s\n' "$f"
-    done
+    done < <(auto_rc_candidates)
 }
 
 # Whether phpswitch's auto-switching is in any rc file (v2 line or legacy hook)
@@ -3823,7 +3829,7 @@ function doctor_run {
     local login_shell rc_file
     if login_shell=$(auto_login_shell); then
         rc_file=$(auto_rc_file "$login_shell")
-        if [ -f "$rc_file" ] && grep -qF "$AUTO_INIT_MARKER" "$rc_file"; then
+        if [ -f "$rc_file" ] && grep -qxF "$AUTO_INIT_MARKER" "$rc_file"; then
             if [ -n "${PHPSWITCH_BIN:-}" ]; then
                 doctor_ok "Per-shell switching is installed in $rc_file and loaded in this shell"
             else
@@ -3852,7 +3858,7 @@ function doctor_run {
 
     # 6b. PHP PATH entries in rc files that phpswitch doesn't manage
     local rc unmanaged
-    for rc in "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile" "$HOME/.config/fish/config.fish"; do
+    while IFS= read -r rc; do
         [ -f "$rc" ] || continue
         unmanaged=$(awk '
             /^# BEGIN PHPSWITCH MANAGED BLOCK/ { inside = 1; next }
@@ -3863,7 +3869,7 @@ function doctor_run {
             doctor_warn "PHP PATH entry not managed by phpswitch in $rc (line $unmanaged)" \
                 "It pins a PHP version in every new shell; remove it if per-shell or global switching should decide"
         fi
-    done
+    done < <(auto_rc_candidates)
 
     # 7. Project version for the current directory
     local project project_dir

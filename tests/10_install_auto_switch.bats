@@ -357,3 +357,37 @@ RC
     [ "$status" -eq 0 ]
     grep -qx 'AUTO_RESTART_PHP_FPM=false' "$HOME/.phpswitch.conf"
 }
+
+@test "legacy hooks in .zprofile and .bash_login are found, migrated and removed" {
+    use_shell zsh
+    printf 'export EDITOR=vim\n' > "$HOME/.zshrc"
+    cp "$FIXTURES/legacy-32bad01-zsh.rc" "$HOME/.zprofile"
+    cp "$FIXTURES/legacy-32bad01-bash.rc" "$HOME/.bash_login"
+    auto_is_installed
+    run auto_install
+    [ "$status" -eq 0 ]
+    run grep -l "phpswitch_auto_detect_project" "$HOME/.zprofile" "$HOME/.bash_login"
+    [ "$status" -ne 0 ]
+
+    cp "$FIXTURES/legacy-32bad01-bash.rc" "$HOME/.bash_login"
+    run auto_uninstall
+    [ "$status" -eq 0 ]
+    run grep -l "phpswitch_auto_detect_project\|PHPSwitch shell integration" "$HOME/.zshrc" "$HOME/.bash_login"
+    [ "$status" -ne 0 ]
+}
+
+@test "marker text inside a longer line doesn't count as installed" {
+    use_shell zsh
+    printf '# old: # PHPSwitch shell integration was here\n' > "$HOME/.zshrc"
+    run auto_is_installed
+    [ "$status" -ne 0 ]
+    run auto_install
+    [ "$status" -eq 0 ]
+    grep -qx '# PHPSwitch shell integration' "$HOME/.zshrc"
+    auto_is_installed
+    run auto_uninstall
+    [ "$status" -eq 0 ]
+    grep -qx '# old: # PHPSwitch shell integration was here' "$HOME/.zshrc"
+    run grep -cx '# PHPSwitch shell integration' "$HOME/.zshrc"
+    [ "$output" = "0" ]
+}

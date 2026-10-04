@@ -100,7 +100,7 @@ function doctor_run {
     local login_shell rc_file
     if login_shell=$(auto_login_shell); then
         rc_file=$(auto_rc_file "$login_shell")
-        if [ -f "$rc_file" ] && grep -qF "$AUTO_INIT_MARKER" "$rc_file"; then
+        if [ -f "$rc_file" ] && grep -qxF "$AUTO_INIT_MARKER" "$rc_file"; then
             if [ -n "${PHPSWITCH_BIN:-}" ]; then
                 doctor_ok "Per-shell switching is installed in $rc_file and loaded in this shell"
             else
@@ -129,7 +129,7 @@ function doctor_run {
 
     # 6b. PHP PATH entries in rc files that phpswitch doesn't manage
     local rc unmanaged
-    for rc in "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile" "$HOME/.config/fish/config.fish"; do
+    while IFS= read -r rc; do
         [ -f "$rc" ] || continue
         unmanaged=$(awk '
             /^# BEGIN PHPSWITCH MANAGED BLOCK/ { inside = 1; next }
@@ -140,7 +140,7 @@ function doctor_run {
             doctor_warn "PHP PATH entry not managed by phpswitch in $rc (line $unmanaged)" \
                 "It pins a PHP version in every new shell; remove it if per-shell or global switching should decide"
         fi
-    done
+    done < <(auto_rc_candidates)
 
     # 7. Project version for the current directory
     local project project_dir

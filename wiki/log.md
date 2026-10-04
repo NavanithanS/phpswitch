@@ -100,3 +100,7 @@ Like option 5 before, "auto restart PHP-FPM" and "backup config files" passed `t
 ## [2026-10-04] lint | Global switch no longer starts PHP-FPM
 
 `version_switch_php` called `fpm_restart` on every version change, and that starts PHP-FPM even when none was running. It now does so only when a PHP service is `started` (`fpm_any_running`) and `AUTO_RESTART_PHP_FPM=true`. The extension paths still call `fpm_restart` directly. Updated [[concepts/fpm-management]].
+
+## [2026-10-04] lint | One rc file list, whole-line marker match
+
+The rc files to scan were listed three times. The legacy list lacked `.zprofile` and `.bash_login`, so hooks there were never migrated or removed. All three scans now use `auto_rc_candidates`. `auto_install` and doctor also matched the integration marker as a substring while uninstall matched whole lines, so a comment containing the marker made install say "already set up" while the menu said "off". All four now use `grep -qxF`. Updated AGENTS.md, [[concepts/shell-integration]] and [[entities/lib-auto-switch]].
