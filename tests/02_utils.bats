@@ -47,3 +47,24 @@ teardown() {
     run utils_validate_path "/tmp/valid/path"
     [ "$status" -eq 0 ]
 }
+
+@test "replace_file_contents keeps symlinks and file mode" {
+    mkdir -p "$HOME/dotfiles"
+    printf 'old\n' > "$HOME/dotfiles/rc"
+    chmod 640 "$HOME/dotfiles/rc"
+    ln -s dotfiles/rc "$HOME/.rc"
+    printf 'new\n' > "$HOME/src"
+    run utils_replace_file_contents "$HOME/.rc" "$HOME/src"
+    [ "$status" -eq 0 ]
+    [ -L "$HOME/.rc" ]
+    [ "$(cat "$HOME/dotfiles/rc")" = "new" ]
+    [ "$(stat -f '%Lp' "$HOME/dotfiles/rc")" = "640" ]
+}
+
+@test "replace_file_contents leaves the target intact when the source can't be read" {
+    printf 'keep\n' > "$HOME/rc"
+    run utils_replace_file_contents "$HOME/rc" "$HOME/missing"
+    [ "$status" -ne 0 ]
+    [ "$(cat "$HOME/rc")" = "keep" ]
+    [ -z "$(find "$HOME" -name '.phpswitch.*')" ]
+}

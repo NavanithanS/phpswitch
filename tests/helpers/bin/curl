@@ -1,0 +1,21 @@
+#!/bin/bash
+# Fake curl for tests. Serves fixtures from $FAKE_CURL_DIR, where each URL
+# maps to a file named after the URL with every non-alphanumeric char -> "_".
+# Missing fixtures exit 22, like `curl -f` on an HTTP error.
+url="" out=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -o) out="$2"; shift ;;
+        http*) url="$1" ;;
+    esac
+    shift
+done
+[ -n "$FAKE_CURL_LOG" ] && printf '%s\n' "$url" >> "$FAKE_CURL_LOG"
+
+fixture="${FAKE_CURL_DIR:-/nonexistent}/$(printf '%s' "$url" | tr -c '[:alnum:]' '_')"
+[ -f "$fixture" ] || exit 22
+if [ -n "$out" ]; then
+    cp "$fixture" "$out"
+else
+    cat "$fixture"
+fi

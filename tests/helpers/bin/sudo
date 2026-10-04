@@ -1,0 +1,5 @@
+#!/bin/bash
+# Fake sudo for tests: never escalate, never touch system paths.
+[ -n "$FAKE_BREW_LOG" ] && printf 'sudo %s\n' "$*" >> "$FAKE_BREW_LOG"
+echo "fake sudo: refusing '$*'" >&2
+exit 1

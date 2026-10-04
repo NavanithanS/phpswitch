@@ -1,0 +1,412 @@
+#!/usr/bin/env bats
+
+load helpers/common
+
+FIXTURES="${BATS_TEST_DIRNAME}/fixtures"
+
+setup() {
+    common_setup
+    load_modules
+    fake_php_install php@8.1
+    fake_php_install php@8.2
+    fake_php_link php@8.1
+    # init_self_path uses $0; point it at the built artifact
+    init_self_path() { printf '%s\n' "$REPO_ROOT/php-switcher.sh"; }
+    mkdir -p "$HOME/.config/fish"
+}
+
+teardown() {
+    common_teardown
+}
+
+use_shell() {
+    export SHELL="/bin/$1"
+}
+
+rc_for() {
+    case "$1" in
+        zsh) echo "$HOME/.zshrc" ;;
+        bash) echo "$HOME/.bashrc" ;;
+        fish) echo "$HOME/.config/fish/config.fish" ;;
+    esac
+}
+
+sum() {
+    shasum -a 256 "$1" | awk '{print $1}'
+}
+
+@test "legacy hooks in other rc files are removed too" {
+    use_shell zsh
+    printf 'export EDITOR=vim\n' > "$HOME/.zshrc"
+    cp "$FIXTURES/legacy-32bad01-bash.rc" "$HOME/.bashrc"
+    cp "$FIXTURES/legacy-bfc6fa9-bash.rc" "$HOME/.profile"
+    run auto_install
+    [ "$status" -eq 0 ]
+    grep -qx '# PHPSwitch shell integration' "$HOME/.zshrc"
+    run grep -l "phpswitch_auto_detect_project" "$HOME/.bashrc" "$HOME/.profile"
+    [ "$status" -ne 0 ]
+    [ -n "$(find "$HOME" -maxdepth 1 -name '.bashrc.bak.*')" ]
+    [ -n "$(find "$HOME" -maxdepth 1 -name '.profile.bak.*')" ]
+}
+
+@test "one unsafe legacy block leaves every rc file unchanged" {
+    use_shell zsh
+    cp "$FIXTURES/legacy-32bad01-zsh.rc" "$HOME/.zshrc"
+    sed '$d' "$FIXTURES/legacy-32bad01-bash.rc" > "$HOME/.bashrc"
+    printf 'export AFTER=1\n' >> "$HOME/.bashrc"
+    local zsh_before bash_before
+    zsh_before=$(sum "$HOME/.zshrc"); bash_before=$(sum "$HOME/.bashrc")
+    run auto_install
+    [ "$status" -ne 0 ]
+    [[ "$output" =~ ".bashrc" ]]
+    [ "$(sum "$HOME/.zshrc")" = "$zsh_before" ]
+    [ "$(sum "$HOME/.bashrc")" = "$bash_before" ]
+}
+
+@test "a failed target backup changes no file" {
+    use_shell zsh
+    printf 'export EDITOR=vim\n' > "$HOME/.zshrc"
+    cp "$FIXTURES/legacy-32bad01-bash.rc" "$HOME/.bashrc"
+    local zsh_before bash_before
+    zsh_before=$(sum "$HOME/.zshrc"); bash_before=$(sum "$HOME/.bashrc")
+    auto_backup_rc() { [ "$1" = "$HOME/.zshrc" ] && return 1; command cp "$1" "$1.bak.test"; }
+    run auto_install
+    [ "$status" -ne 0 ]
+    [ "$(sum "$HOME/.zshrc")" = "$zsh_before" ]
+    [ "$(sum "$HOME/.bashrc")" = "$bash_before" ]
+}
+
+@test "unsupported login shell changes nothing" {
+    export SHELL=/bin/tcsh
+    run auto_install
+    [ "$status" -ne 0 ]
+    [ -z "$(find "$HOME" -maxdepth 1 -name '.*rc*')" ]
+}
+
+@test "fresh install adds the integration line once" {
+    use_shell zsh
+    printf 'export EDITOR=vim\n' > "$HOME/.zshrc"
+    run auto_install
+    [ "$status" -eq 0 ]
+    grep -qx 'export EDITOR=vim' "$HOME/.zshrc"
+    grep -qx '# PHPSwitch shell integration' "$HOME/.zshrc"
+    grep -qF "init zsh)\"" "$HOME/.zshrc"
+    local before
+    before=$(sum "$HOME/.zshrc")
+    run auto_install
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "already set up" ]]
+    [ "$(sum "$HOME/.zshrc")" = "$before" ]
+}
+
+@test "legacy blocks from every released installer are migrated" {
+    local fixture sh rc target
+    for fixture in "$FIXTURES"/legacy-*.rc; do
+        sh=$(basename "$fixture" .rc); sh=${sh##*-}
+        use_shell "$sh"
+        rc=$(rc_for "$sh")
+        cp "$fixture" "$rc"
+        printf 'alias after_block=1\n' >> "$rc"
+
+        run auto_install
+        [ "$status" -eq 0 ] || { echo "failed for $fixture: $output"; return 1; }
+        run grep -c "phpswitch_auto_detect_project" "$rc"
+        [ "$output" = "0" ] || { echo "legacy hook left in $fixture"; return 1; }
+        grep -q 'EDITOR' "$rc"
+        grep -qx 'alias after_block=1' "$rc"
+        # macOS bash: a .bashrc nothing loads gets no integration line;
+        # it goes to the login file instead
+        target=$(auto_rc_file "$sh")
+        grep -qx '# PHPSwitch shell integration' "$target"
+        rm -f "$rc" "$rc".bak.* "$target"
+    done
+}
+
+@test "migration keeps a backup identical to the original" {
+    use_shell zsh
+    cp "$FIXTURES/legacy-32bad01-zsh.rc" "$HOME/.zshrc"
+    local original
+    original=$(sum "$HOME/.zshrc")
+    run auto_install
+    [ "$status" -eq 0 ]
+    local backup
+    backup=$(find "$HOME" -maxdepth 1 -name '.zshrc.bak.*' | head -n 1)
+    [ -n "$backup" ]
+    [ "$(sum "$backup")" = "$original" ]
+}
+
+@test "migration preserves user content around the block exactly" {
+    use_shell bash
+    { printf 'line one\n'; cat "$FIXTURES/legacy-32bad01-bash.rc"; printf 'line after\n'; } > "$HOME/.bashrc"
+    run auto_install
+    [ "$status" -eq 0 ]
+    # Expected: original minus the legacy block (and its blank separator), plus the integration block
+    run awk '/^# PHPSwitch shell integration$/{exit} {print}' "$HOME/.bashrc"
+    [ "$output" = "$(printf 'line one\nexport EDITOR=vim\nline after\n')" ]
+}
+
+@test "v1.4.0 block without a reliable end is left byte-identical" {
+    use_shell zsh
+    cat > "$HOME/.zshrc" <<'RC'
+export EDITOR=vim
+
+# PHPSwitch auto-switching hooks
+function phpswitch_auto_detect_project() {
+    phpswitch --auto-mode
+}
+autoload -U add-zsh-hook
+add-zsh-hook chpwd phpswitch_auto_detect_project
+RC
+    local before
+    before=$(sum "$HOME/.zshrc")
+    run auto_install
+    [ "$status" -ne 0 ]
+    [[ "$output" =~ "can't be removed automatically" ]]
+    [ "$(sum "$HOME/.zshrc")" = "$before" ]
+}
+
+@test "legacy block with a missing end anchor is left byte-identical" {
+    use_shell zsh
+    sed '$d' "$FIXTURES/legacy-32bad01-zsh.rc" > "$HOME/.zshrc"
+    printf 'export AFTER=1\n' >> "$HOME/.zshrc"
+    local before
+    before=$(sum "$HOME/.zshrc")
+    run auto_install
+    [ "$status" -ne 0 ]
+    [ "$(sum "$HOME/.zshrc")" = "$before" ]
+}
+
+@test "migrating twice changes nothing the second time" {
+    use_shell fish
+    cp "$FIXTURES/legacy-bfc6fa9-fish.rc" "$HOME/.config/fish/config.fish"
+    run auto_install
+    [ "$status" -eq 0 ]
+    local after_first
+    after_first=$(sum "$HOME/.config/fish/config.fish")
+    run auto_install
+    [ "$status" -eq 0 ]
+    [ "$(sum "$HOME/.config/fish/config.fish")" = "$after_first" ]
+}
+
+@test "a symlinked rc file stays a symlink" {
+    use_shell zsh
+    mkdir -p "$HOME/dotfiles"
+    cp "$FIXTURES/legacy-32bad01-zsh.rc" "$HOME/dotfiles/zshrc"
+    ln -s "$HOME/dotfiles/zshrc" "$HOME/.zshrc"
+    run auto_install
+    [ "$status" -eq 0 ]
+    [ -L "$HOME/.zshrc" ]
+    grep -qx '# PHPSwitch shell integration' "$HOME/dotfiles/zshrc"
+}
+
+@test "migration removes the legacy directory cache" {
+    use_shell zsh
+    mkdir -p "$HOME/.cache/phpswitch"
+    echo "/tmp:php@8.1" > "$HOME/.cache/phpswitch/directory_cache.txt"
+    cp "$FIXTURES/legacy-32bad01-zsh.rc" "$HOME/.zshrc"
+    run auto_install
+    [ "$status" -eq 0 ]
+    [ ! -f "$HOME/.cache/phpswitch/directory_cache.txt" ]
+}
+
+@test "bash without .bashrc uses .bash_profile" {
+    use_shell bash
+    printf 'export A=1\n' > "$HOME/.bash_profile"
+    run auto_install
+    [ "$status" -eq 0 ]
+    grep -qx '# PHPSwitch shell integration' "$HOME/.bash_profile"
+    [ ! -f "$HOME/.bashrc" ]
+}
+
+@test "installed rc line activates per-shell switching in a real zsh" {
+    use_shell zsh
+    cp "$FIXTURES/legacy-32bad01-zsh.rc" "$HOME/.zshrc"
+    run auto_install
+    [ "$status" -eq 0 ]
+    mkdir -p "$HOME/app"
+    echo "8.2" > "$HOME/app/.php-version"
+    run env -i HOME="$HOME" FAKE_BREW_PREFIX="$FAKE_BREW_PREFIX" FAKE_BREW_LIST="$FAKE_BREW_LIST" \
+        PATH="$FAKE_BREW_PREFIX/bin:${BATS_TEST_DIRNAME}/helpers/bin:/usr/bin:/bin" \
+        zsh -f -c 'source "$HOME/.zshrc"; cd "$HOME/app"; php -v; cd "$HOME"; php -v'
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "PHP 8.2.0 (cli)" ]
+    [ "${lines[1]}" = "PHP 8.1.0 (cli)" ]
+}
+
+@test "--install-auto-switch targets the login shell's rc file, not bash" {
+    printf 'AUTO_RESTART_PHP_FPM=false\n' > "$HOME/.phpswitch.conf"
+    run env SHELL=/bin/zsh "$REPO_ROOT/php-switcher.sh" --install-auto-switch
+    [ "$status" -eq 0 ]
+    grep -qx '# PHPSwitch shell integration' "$HOME/.zshrc"
+    [ ! -f "$HOME/.bashrc" ]
+    grep -q "AUTO_SWITCH_PHP_VERSION=\"true\"" "$HOME/.phpswitch.conf"
+}
+
+# --- disabling (auto_uninstall) ---------------------------------------------
+
+@test "uninstall restores an rc file to its exact pre-install content" {
+    use_shell zsh
+    printf 'export A=1\nalias ll="ls -la"\n' > "$HOME/.zshrc"
+    before=$(sum "$HOME/.zshrc")
+    run auto_install
+    [ "$status" -eq 0 ]
+    printf 'AUTO_SWITCH_PHP_VERSION=true\n' > "$HOME/.phpswitch.conf"
+    run auto_uninstall
+    [ "$status" -eq 0 ]
+    [ "$(sum "$HOME/.zshrc")" = "$before" ]
+    grep -qx 'AUTO_SWITCH_PHP_VERSION="false"' "$HOME/.phpswitch.conf"
+    ls "$HOME"/.zshrc.bak.* >/dev/null
+    run auto_is_installed
+    [ "$status" -ne 0 ]
+}
+
+@test "uninstall removes integration and legacy hooks from every file" {
+    use_shell zsh
+    printf 'export A=1\n' > "$HOME/.zshrc"
+    run auto_install
+    [ "$status" -eq 0 ]
+    cp "$FIXTURES/legacy-32bad01-zsh.rc" "$HOME/.bashrc"
+    run auto_uninstall
+    [ "$status" -eq 0 ]
+    run grep -c 'PHPSwitch shell integration' "$HOME/.zshrc"
+    [ "$output" = "0" ]
+    run grep -c 'phpswitch_auto_detect_project' "$HOME/.bashrc"
+    [ "$output" = "0" ]
+    grep -q 'EDITOR' "$HOME/.bashrc"
+}
+
+@test "uninstall refuses a hand-edited line and changes no file" {
+    use_shell zsh
+    printf 'export A=1\n' > "$HOME/.zshrc"
+    run auto_install
+    [ "$status" -eq 0 ]
+    printf 'x\n# PHPSwitch shell integration\nexport SOMETHING_ELSE=1\n' > "$HOME/.bash_profile"
+    zsh_before=$(sum "$HOME/.zshrc")
+    bp_before=$(sum "$HOME/.bash_profile")
+    run auto_uninstall
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"No files were changed"* ]]
+    [ "$(sum "$HOME/.zshrc")" = "$zsh_before" ]
+    [ "$(sum "$HOME/.bash_profile")" = "$bp_before" ]
+}
+
+@test "uninstall with nothing installed changes nothing" {
+    printf 'export A=1\n' > "$HOME/.zshrc"
+    before=$(sum "$HOME/.zshrc")
+    run auto_uninstall
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"No PHPSwitch auto-switching found"* ]]
+    [ "$(sum "$HOME/.zshrc")" = "$before" ]
+}
+
+@test "menu: Disable removes the hook even when the config flag says false" {
+    use_shell zsh
+    printf 'export A=1\n' > "$HOME/.zshrc"
+    run auto_install
+    [ "$status" -eq 0 ]
+    AUTO_SWITCH_PHP_VERSION=false
+    run cmd_configure_auto_switch <<< "y"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"currently enabled"* ]]
+    run grep -c 'PHPSwitch shell integration' "$HOME/.zshrc"
+    [ "$output" = "0" ]
+}
+
+@test "config menu: Enter on auto-switching keeps the hook; n removes it" {
+    use_shell zsh
+    # core_load_config would install phpswitch's EXIT trap inside bats
+    utils_setup_temp_cleanup_trap() { :; }
+    printf 'export A=1\n' > "$HOME/.zshrc"
+    run auto_install
+    [ "$status" -eq 0 ]
+    run cmd_configure_phpswitch <<< $'5\n\nn'
+    [ "$status" -eq 0 ]
+    grep -qx '# PHPSwitch shell integration' "$HOME/.zshrc"
+    grep -qx 'AUTO_SWITCH_PHP_VERSION=true' "$HOME/.phpswitch.conf"
+
+    run cmd_configure_phpswitch <<< $'5\nn\nn'
+    [ "$status" -eq 0 ]
+    run grep -c 'PHPSwitch shell integration' "$HOME/.zshrc"
+    [ "$output" = "0" ]
+    grep -qx 'AUTO_SWITCH_PHP_VERSION=false' "$HOME/.phpswitch.conf"
+}
+
+@test "config menu: Enter keeps FPM restart and backup settings; n turns them off" {
+    # core_load_config would install phpswitch's EXIT trap inside bats
+    utils_setup_temp_cleanup_trap() { :; }
+    core_create_default_config
+    utils_set_config_value "AUTO_RESTART_PHP_FPM" "true" "$HOME/.phpswitch.conf"
+    utils_set_config_value "BACKUP_CONFIG_FILES" "true" "$HOME/.phpswitch.conf"
+
+    run cmd_configure_phpswitch <<< $'1\n\nn'
+    [ "$status" -eq 0 ]
+    run cmd_configure_phpswitch <<< $'2\n\nn'
+    [ "$status" -eq 0 ]
+    grep -qx 'AUTO_RESTART_PHP_FPM=true' "$HOME/.phpswitch.conf"
+    grep -qx 'BACKUP_CONFIG_FILES=true' "$HOME/.phpswitch.conf"
+
+    run cmd_configure_phpswitch <<< $'1\nn\nn'
+    [ "$status" -eq 0 ]
+    run cmd_configure_phpswitch <<< $'2\nn\nn'
+    [ "$status" -eq 0 ]
+    grep -qx 'AUTO_RESTART_PHP_FPM=false' "$HOME/.phpswitch.conf"
+    grep -qx 'BACKUP_CONFIG_FILES=false' "$HOME/.phpswitch.conf"
+
+    # Enter on a setting that is off keeps it off
+    run cmd_configure_phpswitch <<< $'1\n\nn'
+    [ "$status" -eq 0 ]
+    grep -qx 'AUTO_RESTART_PHP_FPM=false' "$HOME/.phpswitch.conf"
+}
+
+@test "legacy hooks in .zprofile and .bash_login are found, migrated and removed" {
+    use_shell zsh
+    printf 'export EDITOR=vim\n' > "$HOME/.zshrc"
+    cp "$FIXTURES/legacy-32bad01-zsh.rc" "$HOME/.zprofile"
+    cp "$FIXTURES/legacy-32bad01-bash.rc" "$HOME/.bash_login"
+    auto_is_installed
+    run auto_install
+    [ "$status" -eq 0 ]
+    run grep -l "phpswitch_auto_detect_project" "$HOME/.zprofile" "$HOME/.bash_login"
+    [ "$status" -ne 0 ]
+
+    cp "$FIXTURES/legacy-32bad01-bash.rc" "$HOME/.bash_login"
+    run auto_uninstall
+    [ "$status" -eq 0 ]
+    run grep -l "phpswitch_auto_detect_project\|PHPSwitch shell integration" "$HOME/.zshrc" "$HOME/.bash_login"
+    [ "$status" -ne 0 ]
+}
+
+@test "marker text inside a longer line doesn't count as installed" {
+    use_shell zsh
+    printf '# old: # PHPSwitch shell integration was here\n' > "$HOME/.zshrc"
+    run auto_is_installed
+    [ "$status" -ne 0 ]
+    run auto_install
+    [ "$status" -eq 0 ]
+    grep -qx '# PHPSwitch shell integration' "$HOME/.zshrc"
+    auto_is_installed
+    run auto_uninstall
+    [ "$status" -eq 0 ]
+    grep -qx '# old: # PHPSwitch shell integration was here' "$HOME/.zshrc"
+    run grep -cx '# PHPSwitch shell integration' "$HOME/.zshrc"
+    [ "$output" = "0" ]
+}
+
+@test "--uninstall-auto-switch removes the line and reports failure through its exit code" {
+    printf 'AUTO_RESTART_PHP_FPM=false\n' > "$HOME/.phpswitch.conf"
+    printf 'export A=1\n' > "$HOME/.zshrc"
+    run env SHELL=/bin/zsh "$REPO_ROOT/php-switcher.sh" --install-auto-switch
+    [ "$status" -eq 0 ]
+    run env SHELL=/bin/zsh "$REPO_ROOT/php-switcher.sh" --uninstall-auto-switch
+    [ "$status" -eq 0 ]
+    run grep -c 'PHPSwitch shell integration' "$HOME/.zshrc"
+    [ "$output" = "0" ]
+    grep -q "AUTO_SWITCH_PHP_VERSION=\"false\"" "$HOME/.phpswitch.conf"
+
+    # a line after the marker that phpswitch didn't write -> refuse, exit non-zero
+    printf '# PHPSwitch shell integration\nexport B=2\n' >> "$HOME/.zshrc"
+    before=$(sum "$HOME/.zshrc")
+    run env SHELL=/bin/zsh "$REPO_ROOT/php-switcher.sh" --uninstall-auto-switch
+    [ "$status" -ne 0 ]
+    [ "$(sum "$HOME/.zshrc")" = "$before" ]
+}

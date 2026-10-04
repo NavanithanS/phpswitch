@@ -1,0 +1,52 @@
+set -gx EDITOR vim
+
+# PHPSwitch auto-switching
+function phpswitch_auto_detect_project --on-variable PWD
+    set cache_file "$HOME/.cache/phpswitch/directory_cache.txt"
+    set current_dir (pwd)
+    set _max_cache_lines 500
+    
+    mkdir -p (dirname "$cache_file") 2>/dev/null
+    
+    # Check cache
+    if test -f "$cache_file"; and test -r "$cache_file"
+        while read -l line
+            set dir_info (string split ":" -- $line)
+            set dir $dir_info[1]
+            set version $dir_info[2]
+            if test "$dir" = "$current_dir"
+                if test -n "$version"; and string match -rq '^[a-zA-Z0-9.@_-]+$' -- "$version"
+                    phpswitch --auto-mode > /dev/null 2>&1
+                end
+                return
+            end
+        end < "$cache_file"
+    end
+    
+    # Not in cache — detect and cache
+    set _detected ""
+    for file in ".php-version" ".phpversion"
+        if test -f "$current_dir/$file"
+            set _detected (cat "$current_dir/$file" | string trim)
+            break
+        end
+    end
+    if test -z "$_detected"; and begin; test -f "$current_dir/composer.json"; or test -f "$current_dir/.tool-versions"; end
+        set _detected (phpswitch --get-project-version 2>/dev/null)
+    end
+    
+    if test -n "$_detected"; and string match -rq '^[a-zA-Z0-9.@_-]+$' -- "$_detected"
+        echo "$current_dir:$_detected" >> "$cache_file" 2>/dev/null
+        phpswitch --auto-mode > /dev/null 2>&1
+    else
+        echo "$current_dir:" >> "$cache_file" 2>/dev/null
+    end
+    
+    # Prune cache if too large
+    if test -f "$cache_file"; and test (wc -l < "$cache_file" 2>/dev/null | string trim) -gt "$_max_cache_lines"
+        tail -n "$_max_cache_lines" "$cache_file" > "$cache_file.tmp" 2>/dev/null; and mv "$cache_file.tmp" "$cache_file" 2>/dev/null
+    end
+end
+
+# Run once when shell starts
+phpswitch_auto_detect_project

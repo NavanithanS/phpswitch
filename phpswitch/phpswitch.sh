@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Version: 1.4.5
+# Version: see PHPSWITCH_VERSION in config/defaults.sh
 # PHPSwitch - PHP Version Manager for macOS
 # This script helps switch between different PHP versions installed via Homebrew
 # and updates shell configuration files (.zshrc, .bashrc, etc.) accordingly
@@ -26,6 +26,11 @@ if [ -d "$SCRIPT_DIR/lib" ]; then
     source "$SCRIPT_DIR/lib/fpm.sh"
     source "$SCRIPT_DIR/lib/extensions.sh"
     source "$SCRIPT_DIR/lib/auto-switch.sh"
+    source "$SCRIPT_DIR/lib/init.sh"
+    source "$SCRIPT_DIR/lib/completions.sh"
+    source "$SCRIPT_DIR/lib/doctor.sh"
+    source "$SCRIPT_DIR/lib/self-manage.sh"
+    source "$SCRIPT_DIR/lib/menu.sh"
     source "$SCRIPT_DIR/lib/commands.sh"
     
     # REL-04: Serialize concurrent auto-switch invocations only.

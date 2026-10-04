@@ -7,7 +7,8 @@ set -e
 # Configuration
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
-PHPSWITCH_SOURCE="$PROJECT_ROOT/phpswitch/phpswitch.sh"
+# Single source of truth for the version
+DEFAULTS_FILE="$PROJECT_ROOT/phpswitch/config/defaults.sh"
 BUILD_SCRIPT="$PROJECT_ROOT/phpswitch/build.sh"
 FORMULA_FILE="$PROJECT_ROOT/Formula/phpswitch.rb"
 # Default to current directory for tap, but allow override
@@ -24,9 +25,19 @@ else
     echo "⚠️  Warning: 'gh' CLI not found. GitHub Release creation will be skipped."
 fi
 
+# Releases are signed; `phpswitch --update` verifies the signature with the
+# public key built into the script. Check before anything is changed.
+MINISIGN_SECRET_KEY="${MINISIGN_SECRET_KEY:-$HOME/.minisign/minisign.key}"
+command -v minisign >/dev/null 2>&1 || { echo "❌ Error: 'minisign' is required to sign releases (brew install minisign)."; exit 1; }
+if ! grep -q '^PHPSWITCH_MINISIGN_PUBKEY="[A-Za-z0-9+/=]\{20,\}"$' "$DEFAULTS_FILE"; then
+    echo "❌ Error: PHPSWITCH_MINISIGN_PUBKEY in $DEFAULTS_FILE is empty or malformed."
+    exit 1
+fi
+[ -f "$MINISIGN_SECRET_KEY" ] || { echo "❌ Error: minisign secret key not found at $MINISIGN_SECRET_KEY (set MINISIGN_SECRET_KEY)."; exit 1; }
+
 # Function to get current version
 get_current_version() {
-    grep "^# Version:" "$PHPSWITCH_SOURCE" | cut -d":" -f2 | tr -d " "
+    grep '^PHPSWITCH_VERSION=' "$DEFAULTS_FILE" | sed 's/PHPSWITCH_VERSION="\(.*\)"/\1/'
 }
 
 # Function to update version in files
@@ -35,15 +46,6 @@ update_version() {
     
     echo "📝 Updating version to $new_version..."
     
-    # 1. Update source entry point
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        sed -i '' "s/^# Version: .*/# Version: $new_version/" "$PHPSWITCH_SOURCE"
-    else
-        sed -i "s/^# Version: .*/# Version: $new_version/" "$PHPSWITCH_SOURCE"
-    fi
-    
-    # 2. Update the single source of truth (defaults.sh)
-    local DEFAULTS_FILE="$PROJECT_ROOT/phpswitch/config/defaults.sh"
     if [ -f "$DEFAULTS_FILE" ]; then
         if [[ "$OSTYPE" == "darwin"* ]]; then
             sed -i '' "s/^PHPSWITCH_VERSION=\".*\"/PHPSWITCH_VERSION=\"$new_version\"/" "$DEFAULTS_FILE"
@@ -72,9 +74,11 @@ CURRENT_VERSION=$(get_current_version)
 echo "ℹ️  Current Version: $CURRENT_VERSION"
 
 read -r -p "Enter new version (e.g., 1.4.4): " NEW_VERSION
+# Tags are always v-prefixed; accept "v1.4.4" input too
+NEW_VERSION="${NEW_VERSION#v}"
 
-if [[ -z "$NEW_VERSION" ]]; then
-    echo "❌ Error: Version cannot be empty."
+if [[ ! "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "❌ Error: Version must look like 1.4.4."
     exit 1
 fi
 
@@ -87,12 +91,33 @@ else
     echo "🔨 Running build..."
     "$BUILD_SCRIPT" >/dev/null
     
-    # Commit version bump
+    # Commit only the version bump and the rebuilt artifact, never other
+    # working-tree or staged changes
     echo "💾 Committing version bump..."
-    git add .
-    git commit -m "chore: release v$NEW_VERSION"
+    git -C "$PROJECT_ROOT" add -- phpswitch/config/defaults.sh php-switcher.sh
+    git -C "$PROJECT_ROOT" commit -m "chore: release v$NEW_VERSION" -- phpswitch/config/defaults.sh php-switcher.sh
     git push origin HEAD
 fi
+
+# Checksum asset that `phpswitch --update` verifies against (fails closed without it)
+ARTIFACT="$PROJECT_ROOT/php-switcher.sh"
+CHECKSUM_FILE="$PROJECT_ROOT/php-switcher.sh.sha256"
+(cd "$PROJECT_ROOT" && shasum -a 256 php-switcher.sh > "$CHECKSUM_FILE")
+echo "🔐 Artifact SHA256: $(awk '{print $1}' "$CHECKSUM_FILE")"
+
+# Signature asset, verified by `phpswitch --update` when minisign is installed
+SIGNATURE_FILE="$PROJECT_ROOT/php-switcher.sh.minisig"
+echo "✍️  Signing the artifact (minisign may ask for the key password)..."
+minisign -S -s "$MINISIGN_SECRET_KEY" -m "$ARTIFACT" -x "$SIGNATURE_FILE" -t "phpswitch v$NEW_VERSION"
+# Check against the key built into the artifact, so a build/key mismatch is
+# caught before anything is published
+BUILT_PUBKEY=$(grep '^PHPSWITCH_MINISIGN_PUBKEY=' "$ARTIFACT" | cut -d'"' -f2)
+if [ -z "$BUILT_PUBKEY" ] || ! minisign -V -q -P "$BUILT_PUBKEY" -m "$ARTIFACT" -x "$SIGNATURE_FILE"; then
+    echo "❌ Error: the signature doesn't verify against the public key built into php-switcher.sh."
+    echo "   Nothing was tagged or published."
+    exit 1
+fi
+echo "✅ Signature verified against the built-in public key"
 
 # 2. Tag and Release on GitHub
 echo "🏷️  Tagging v$NEW_VERSION..."
@@ -110,7 +135,9 @@ if [ "$HAS_GH" = true ]; then
     else
         # Generate notes or use custom ones
         gh release create "v$NEW_VERSION" \
-            "$PROJECT_ROOT/php-switcher.sh#Standalone Script (php-switcher.sh)" \
+            "$ARTIFACT#Standalone Script (php-switcher.sh)" \
+            "$CHECKSUM_FILE#SHA-256 checksum" \
+            "$SIGNATURE_FILE#minisign signature" \
             --title "v$NEW_VERSION" \
             --generate-notes
         echo "✅ Release created successfully!"
@@ -119,7 +146,9 @@ else
     echo "📦 Manual GitHub Release Required"
     echo "   1. Go to https://github.com/NavanithanS/phpswitch/releases/new"
     echo "   2. Tag: v$NEW_VERSION"
-    echo "   3. Upload: $PROJECT_ROOT/php-switcher.sh"
+    echo "   3. Upload: $ARTIFACT"
+    echo "      and:    $CHECKSUM_FILE  (required by phpswitch --update)"
+    echo "      and:    $SIGNATURE_FILE  (required when minisign is installed)"
     echo "   4. Publish the release."
     
     read -r -p "Press Enter once you have created the release..."

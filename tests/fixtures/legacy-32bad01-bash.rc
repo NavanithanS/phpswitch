@@ -1,0 +1,54 @@
+export EDITOR=vim
+
+# PHPSwitch auto-switching
+function phpswitch_auto_detect_project() {
+    local cache_file="$HOME/.cache/phpswitch/directory_cache.txt"
+    local current_dir="$(pwd)"
+    local _max_cache_lines=500
+    
+    mkdir -p "$(dirname "$cache_file")" 2>/dev/null
+    
+    # Check if in cache
+    if [ -f "$cache_file" ] && [ -r "$cache_file" ]; then
+        while IFS=: read -r dir version; do
+            if [ "$dir" = "$current_dir" ]; then
+                if [ -n "$version" ] && [[ "$version" =~ ^[a-zA-Z0-9.@_-]+$ ]]; then
+                    phpswitch --auto-mode > /dev/null 2>&1
+                fi
+                return
+            fi
+        done < "$cache_file"
+    fi
+    
+    # Not in cache — detect and cache
+    local _detected=""
+    for file in ".php-version" ".phpversion"; do
+        if [ -f "$current_dir/$file" ]; then
+            _detected=$(tr -d '[:space:]' < "$current_dir/$file" 2>/dev/null)
+            break
+        fi
+    done
+    if [ -z "$_detected" ] && { [ -f "$current_dir/composer.json" ] || [ -f "$current_dir/.tool-versions" ]; }; then
+        _detected=$(phpswitch --get-project-version 2>/dev/null)
+    fi
+    
+    if [ -n "$_detected" ] && [[ "$_detected" =~ ^[a-zA-Z0-9.@_-]+$ ]]; then
+        printf '%s:%s\n' "$current_dir" "$_detected" >> "$cache_file" 2>/dev/null
+        phpswitch --auto-mode > /dev/null 2>&1
+    else
+        printf '%s:\n' "$current_dir" >> "$cache_file" 2>/dev/null
+    fi
+    
+    # PERF-03: Prune cache if too large
+    if [ -f "$cache_file" ] && [ "$(wc -l < "$cache_file" 2>/dev/null)" -gt "$_max_cache_lines" ]; then
+        tail -n "$_max_cache_lines" "$cache_file" > "$cache_file.tmp" 2>/dev/null && mv "$cache_file.tmp" "$cache_file" 2>/dev/null
+    fi
+}
+
+# Enable the cd hook for bash
+if [[ "$PROMPT_COMMAND" != *"phpswitch_auto_detect_project"* ]]; then
+    PROMPT_COMMAND="phpswitch_auto_detect_project;$PROMPT_COMMAND"
+fi
+
+# Run once when shell starts
+phpswitch_auto_detect_project
